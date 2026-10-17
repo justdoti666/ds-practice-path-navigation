@@ -1,0 +1,38 @@
+# 示例城市 · 与 demo_city.json 完全等价的 TXT 版本（自检项：两种格式加载出同一张图）
+# 坐标单位 km；边不写 distance_km 时按坐标欧氏距离算，不写 time_min 时按线路速度换算
+[meta]
+name=示例城市 · 3 条轨道 + 1 条接驳
+note=TXT 版，与 demo_city.json 等价
+
+[lines]
+# id  名称    速度km/h  颜色
+L1    红线    35        #e4572e
+L2    蓝线    35        #2e86de
+L3    机场快线  80       #10ac84
+L4    接驳线   10       #8e44ad
+
+[stations]
+# id   名称     x    y
+S1    中央车站   0    0
+S2    人民广场   2    0
+S3    科技园     4    0.5
+S4    大学城     6    1
+S6    河畔       2    2
+S7    体育馆     4    2.5
+S8    会展中心   6    2
+S9    北苑       0    4
+S10   新城       3    4
+S11   机场       7    4.5
+
+[edges]
+# u    v    线路
+S1    S2   L1
+S2    S3   L1
+S3    S4   L1
+S2    S6   L2
+S6    S7   L2
+S7    S8   L2
+S6    S9   L3
+S9    S10  L3
+S10   S11  L3
+S4    S11  L4
