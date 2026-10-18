@@ -146,7 +146,7 @@ def main(argv=None) -> int:
     ap.add_argument("--pairs", type=int, default=5)
     ap.add_argument("--scale", default="",
                     help="规模模式：逗号分隔的站点数（只用内置合成图，忽略 --data），如 15,60,240")
-    ap.add_argument("--check-cv", type=float, default=0.0, help="变异系数上限（%），超限退出码 2")
+    ap.add_argument("--check-cv", type=float, default=0.0, help="变异系数上限（%%），超限退出码 2")
     ap.add_argument("--data", default=str(ROOT / "data" / "demo_city.json"))
     args = ap.parse_args(argv)
 

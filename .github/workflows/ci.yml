@@ -24,5 +24,9 @@ jobs:
         run: python -m unittest discover -s tests -t . -v
       - name: 自检闸门（10 组断言，纯 headless）
         run: python main.py --check
+      - name: CLI 冒烟（--help 不能崩）
+        run: |
+          python main.py --help > /dev/null
+          python tools/bench.py --help > /dev/null
       - name: 基准 + 噪声闸门（默认写 _smoke/，不污染仓库）
         run: python tools/bench.py --repeats 3 --pairs 2 --check-cv 30

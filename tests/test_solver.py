@@ -163,8 +163,9 @@ class TestTransfers(unittest.TestCase):
         km, tm, seq, sw = solver.analyze_path(g, ["A", "B", "C"])
         self.assertEqual(seq, ["L1", "L1"], "应全程坐 L1（换乘 0 次）")
         self.assertEqual(sw, 0)
-        # 加载器把每条边时间取整到 2 位：单段 60/35=1.714 → 1.71，两段 3.42
-        self.assertAlmostEqual(tm, 2 * round(60 / 35, 2), places=6)
+        # 不绑定"加载器是否取整"：契约 1.3.0 起边权存全精度（2×60/35=3.4286），
+        # 而 analyze_path 只在展示层取 2 位；用容差 0.01 同时兼容两种实现。
+        self.assertAlmostEqual(tm, 2 * 60 / 35, delta=0.01)
         # 更快但多换一次的方案：L2 + L1
         fast_mixed = 60 / 80 + 60 / 35
         self.assertLess(fast_mixed, tm, "L2 方案应更快，但换乘数更高")
@@ -281,6 +282,20 @@ class TestLinesAndResolve(unittest.TestCase):
         km, tm = g.path_metrics(["S2", "S3"])
         self.assertAlmostEqual(km2, km, places=6)
         self.assertAlmostEqual(tm2, tm, places=6)
+
+
+class TestCliHelp(unittest.TestCase):
+    def test_t23_bench_help_formats(self):
+        """T23 `python tools/bench.py --help` 不能因为 help 里的 % 崩掉（argparse 需 %%）。"""
+        import contextlib, importlib.util, io
+        spec = importlib.util.spec_from_file_location("bench_mod", ROOT / "tools" / "bench.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), self.assertRaises(SystemExit) as ctx:
+            mod.main(["--help"])
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertIn("bench", buf.getvalue().lower())
 
 
 class TestPickPair(unittest.TestCase):
