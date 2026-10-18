@@ -90,7 +90,8 @@ def main(argv=None) -> int:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8-sig", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+        # csv 模块默认 lineterminator="\r\n"；显式 LF，保证与入库 CSV 同哈希
+        writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()), lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
     print(f"\nCSV 已写出：{out}（{len(rows)} 个数据集）")

@@ -159,7 +159,9 @@ def main(argv=None) -> int:
     raw = build_graph(read_rows(csv_path), args.spacing, args.line_gap, args.min_gap, args.name)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    # newline="\n"：显式 LF，避免 Windows 上写出 CRLF 导致"同内容不同哈希"
+    out.write_text(json.dumps(raw, ensure_ascii=False, indent=2) + "\n",
+                   encoding="utf-8", newline="\n")
     print(f"已生成 {out}")
     print(f"  {summarize(raw)}")
 
