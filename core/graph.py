@@ -6,7 +6,9 @@
   * Graph（图结构）/ solver（算法引擎）/ ui（界面）三层解耦；
   * 站点 = 顶点（id / 名称 / 坐标），边 = 相邻两站的连接（line_id / 距离 km / 时间 min）；
   * 支持 .json 与 .txt 两种数据文件，两种格式加载出**同一张图**（自检项）；
-  * 所有非法数据在**加载阶段**抛 DataError（带行号/字段），算法层不再兜底。
+  * 所有非法数据在**加载阶段**抛 DataError（带行号/字段），算法层不再兜底；
+  * 边权存**全精度**（不取整），取整只发生在展示层，保证 A* 可采纳性严格成立；
+  * 支持运行时 `add_station / add_edge / remove_edge / remove_station`（P1-06）。
 """
 from __future__ import annotations
 
@@ -105,11 +107,15 @@ class Graph:
             raise DataError("站点列表为空")
         if len(self.stations) < 2:
             raise DataError("至少需要 2 个站点")
+        # 站名查重（P3/P4 引入）：重名会让 main.resolve / 界面选点产生歧义
         names: dict = {}
         for sid, st in self.stations.items():
             if st.name in names:
                 raise DataError(f"站名重复：{st.name}（{names[st.name]} 与 {sid}）")
             names[st.name] = sid
+        # R2：几何自洽的下界依赖"全网最大速度"，动态增删后速度集合可能变化，
+        # 所以这里再校验一次，保证 validate() 幂等且能覆盖运行时修改。
+        vmax = max((ln["speed_kmh"] for ln in self.lines.values()), default=0.0)
         for e in self.edges:
             if e.u not in self.stations or e.v not in self.stations:
                 raise DataError(f"边引用了不存在的站点: {e.u} - {e.v}")
@@ -119,6 +125,62 @@ class Graph:
                 raise DataError(f"边 {e.u}-{e.v} 时间非法: {e.time_min}")
             if e.line not in self.lines:
                 raise DataError(f"边 {e.u}-{e.v} 的线路 {e.line} 未定义")
+            if vmax > 0 and e.time_min < e.distance_km / vmax * 60.0 - 1e-9:
+                raise DataError(
+                    f"边 {e.u}-{e.v} 时间与速度不自洽: {e.time_min:.6g} min < "
+                    f"{e.distance_km / vmax * 60.0:.6g} min（全网最快 {vmax:g} km/h）")
+
+    # -------------------------------------------------------- 动态增删（P1-06）
+    def _rebuild_adj(self) -> None:
+        """按 edges 重建邻接表；任何增删后都必须调用，避免 adj 留下悬空边。"""
+        self.adj = {sid: [] for sid in self.stations}
+        for e in self.edges:
+            self.adj.setdefault(e.u, []).append(e)
+            self.adj.setdefault(e.v, []).append(e)
+
+    def _log_mutation(self, action: str) -> None:
+        """把改动记进 meta，报告里"支持动态增删"有代码证据。"""
+        self.meta.setdefault("mutation_log", []).append(action)
+
+    def add_station(self, station: Station) -> Station:
+        """新增站点；sid 重复或字段非法时抛 DataError。"""
+        _add_station(self, station.sid, station.name, station.x, station.y)
+        self._log_mutation(f"+station {station.sid}")
+        return self.stations[station.sid]
+
+    def add_edge(self, edge: Edge) -> Edge:
+        """新增一条边；端点不存在/自环/线路未定义/重复/非正/几何不自洽都抛 DataError。"""
+        _add_edge(self, edge.u, edge.v, edge.line, edge.distance_km, edge.time_min)
+        self._log_mutation(f"+edge {edge.u}-{edge.v} {edge.line}")
+        return self.edges[-1]
+
+    def remove_edge(self, u: str, v: str, line: str) -> int:
+        """删除指定边，返回删除条数（0 或 1）。"""
+        key = (min(u, v), max(u, v), line)
+        before = len(self.edges)
+        self.edges = [e for e in self.edges
+                      if (min(e.u, e.v), max(e.u, e.v), e.line) != key]
+        removed = before - len(self.edges)
+        if removed:
+            self._rebuild_adj()
+            self._log_mutation(f"-edge {u}-{v} {line}")
+        return removed
+
+    def remove_station(self, sid: str) -> int:
+        """删除站点并级联删除它的所有边，返回删掉的边数。"""
+        if sid not in self.stations:
+            raise DataError(f"要删除的站点不存在: {sid}")
+        before = len(self.edges)
+        self.edges = [e for e in self.edges if e.u != sid and e.v != sid]
+        removed = before - len(self.edges)
+        del self.stations[sid]
+        self._rebuild_adj()
+        self._log_mutation(f"-station {sid}（级联删 {removed} 边）")
+        # 级联后不允许留下指向已删站点的边（悬空引用）
+        for e in self.edges:
+            if e.u not in self.stations or e.v not in self.stations:
+                raise DataError(f"删除 {sid} 后仍存在悬空边: {e.u}-{e.v}")
+        return removed
 
 
 # ---------------------------------------------------------------- 组装工具
@@ -155,10 +217,19 @@ def _add_edge(g: Graph, u: str, v: str, line: str,
     t = float(time_min) if time_min is not None else dist / speed * 60.0
     if t <= 0:
         raise DataError(f"{where}时间必须为正: {u}-{v} -> {t}")
+    # R2（P2 请求）：几何自洽——任何边都不可能比"全网最快线路跑完这段距离"还快。
+    # 显式给的 time_min 偏小会让 A* 的启发式高估、可能返回非最优路径，且小数据测不出来。
+    vmax = max((ln["speed_kmh"] for ln in g.lines.values()), default=0.0)
+    if vmax > 0 and t < dist / vmax * 60.0 - 1e-9:
+        raise DataError(
+            f"{where}时间与速度不自洽: {u}-{v} 用时 {t:.6g} min，"
+            f"但按全网最快 {vmax:g} km/h 仅需 {dist / vmax * 60.0:.6g} min")
     key = (min(u, v), max(u, v), line)
     if any((min(e.u, e.v), max(e.u, e.v), e.line) == key for e in g.edges):
         raise DataError(f"{where}重复边: {u}-{v} ({line})")
-    e = Edge(u, v, line, round(dist, 3), round(t, 2))
+    # R1（P2 请求）：边权存全精度，取整留给展示层（Result），
+    # 这样 A* 的 h ≤ 真实代价严格成立，可采纳性不需要"取整容差"补丁。
+    e = Edge(u, v, line, dist, t)
     g.edges.append(e)
     g.adj.setdefault(u, []).append(e)
     g.adj.setdefault(v, []).append(e)

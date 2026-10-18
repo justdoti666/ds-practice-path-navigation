@@ -7,4 +7,4 @@
   * 任何变更都要在 docs/契约变更.md 记一笔（谁/何时/为什么/影响面）。
 """
 
-CONTRACT_VERSION = "1.2.0"      # 1.2.0：Result 增加 lines；BFS 不再校验 weight；加载期站名查重
+CONTRACT_VERSION = "1.3.0"      # 1.2.0：Result.lines / 站名查重 / path_metrics；1.3.0（P1）：边权全精度 + 几何自洽校验 + 动态增删
