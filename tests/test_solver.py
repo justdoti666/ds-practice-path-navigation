@@ -223,6 +223,22 @@ class TestEdgeCases(unittest.TestCase):
             solver.analyze_path(g, ["A", "A"])
 
 
+class TestPickPair(unittest.TestCase):
+    def test_t18_pick_connected_pair(self):
+        """T18 冒烟选点：优先 S4→S11；否则取首个连通分量里字典序最小的两站；全孤立返回 None。"""
+        g = demo()
+        self.assertEqual(solver.pick_connected_pair(g), ("S4", "S11"))
+        tiny = support.tiny_hand()          # A-B-C 三角，无 S4/S11
+        self.assertEqual(solver.pick_connected_pair(tiny), ("A", "B"))
+        orphan = support.load_spec({
+            "meta": {"name": "orphan"},
+            "lines": [{"id": "L", "name": "线", "speed_kmh": 40}],
+            "stations": [{"id": "A", "name": "甲", "x": 0, "y": 0},
+                         {"id": "B", "name": "乙", "x": 1, "y": 0}],
+            "edges": [],
+        })
+        self.assertIsNone(solver.pick_connected_pair(orphan))
+
 class TestMetrics(unittest.TestCase):
     def test_t11_events_semantics(self):
         """T11 事件语义：数量等于 expanded、末事件是终点、路径节点都被扩展过。"""

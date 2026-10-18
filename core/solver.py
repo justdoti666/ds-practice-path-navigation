@@ -297,6 +297,38 @@ def _check(g: Graph, start: str, goal: str, weight: str) -> None:
         raise DataError(f"权重只能是 {WEIGHTS}")
 
 
+def pick_connected_pair(g: Graph, preferred: Tuple[str, str] = ("S4", "S11")) -> Optional[Tuple[str, str]]:
+    """挑一对**确定连通**的站点，供冒烟/演示自动选点用。
+
+    先试 preferred（示例城市的 S4→S11），不行就按无向连通分量找：取第一个
+    至少含 2 个站点的分量，返回字典序最小的两个站点。复杂度 O(V+E)。
+    """
+    a, b = preferred
+    if a in g.stations and b in g.stations:
+        try:
+            if dijkstra(g, a, b, "time").found:
+                return a, b
+        except (PathNotFound, DataError):
+            pass
+    seen: set = set()
+    for start in sorted(g.stations):
+        if start in seen:
+            continue
+        comp, stack = [], [start]
+        seen.add(start)
+        while stack:
+            u = stack.pop()
+            comp.append(u)
+            for e in g.neighbors(u):
+                v = e.other(u)
+                if v not in seen:
+                    seen.add(v)
+                    stack.append(v)
+        if len(comp) >= 2:
+            comp.sort()
+            return comp[0], comp[1]
+    return None
+
 def solve(g: Graph, start: str, goal: str, algorithm: str, weight: str = "time") -> Result:
     """统一入口：algorithm ∈ {dijkstra, astar, bfs}（大小写与别名均容忍）。"""
     algo = algorithm.lower()

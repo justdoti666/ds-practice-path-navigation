@@ -222,10 +222,17 @@ class App(tk.Tk):
         return WEIGHTS[self.weight_box.current()][1]
 
     # ------------------------------------------------------------ 执行
-    def search(self, animate: bool = False):
+    def search(self, animate: bool = False, silent: bool = False):
+        """执行一次搜索并展示。
+
+        silent=True 时不弹模态框（冒烟/自动化用）：否则数据不匹配时会卡在对话框上，
+        外层还可能把"弹了框"当成"跑成功"。交互式点击保持 silent=False。
+        """
         start, end = self._sid(self.start_box), self._sid(self.end_box)
         if not start or not end:
-            messagebox.showwarning("提示", "请先选择起点和终点")
+            self.log("请先选择起点和终点")
+            if not silent:
+                messagebox.showwarning("提示", "请先选择起点和终点")
             return
         algo = self._algo()
         self.clear(keep_log=True)
@@ -233,11 +240,13 @@ class App(tk.Tk):
             result = solver.solve(self.g, start, end, algo, self._weight())
         except PathNotFound as exc:
             self.log(f"❌ 不可达：{exc}\n   两站不连通（任务书要求展示的异常处理）。")
-            messagebox.showerror("不连通", f"{start} 与 {end} 之间没有可达路径。\n{exc}")
+            if not silent:
+                messagebox.showerror("不连通", f"{start} 与 {end} 之间没有可达路径。\n{exc}")
             return
         except DataError as exc:
             self.log(f"❌ 数据错误：{exc}")
-            messagebox.showerror("数据错误", str(exc))
+            if not silent:
+                messagebox.showerror("数据错误", str(exc))
             return
 
         self.current = result
@@ -308,13 +317,26 @@ def run_gui(graph: Graph):
 
 
 def smoke(graph: Graph, out_ps: str) -> int:
-    """无人工干预的界面冒烟：建窗→求解→画路径→导出画布为 PostScript→销毁。"""
+    """无人工干预的界面冒烟：自动挑选连通起终点 → 求解 → 导出画布 → 销毁。
+
+    必须做到两件事，否则就是"假通过"：
+    * 起终点从**当前图**自动挑（不再硬编码 S4/S11，换数据也能跑）；
+    * 求解后断言 `current is not None and found`，失败就抛错让 `main.py` 返回非 0。
+    """
     app = App(graph)
-    app.start_box.set("大学城（S4）")
-    app.end_box.set("机场（S11）")
-    app.algo_box.current(0)
-    app.search(animate=False)
-    app.update()
-    app.canvas.postscript(file=out_ps, colormode="color")
-    app.destroy()
+    try:
+        pair = solver.pick_connected_pair(graph)
+        if pair is None:
+            raise RuntimeError("图里没有连通的站点对，无法冒烟")
+        start, goal = pair
+        app.start_box.set(f"{graph.stations[start].name}（{start}）")
+        app.end_box.set(f"{graph.stations[goal].name}（{goal}）")
+        app.algo_box.current(0)
+        app.search(animate=False, silent=True)
+        if app.current is None or not app.current.found:
+            raise RuntimeError(f"界面冒烟失败：{app.status.cget('text')}")
+        app.update()
+        app.canvas.postscript(file=out_ps, colormode="color")
+    finally:
+        app.destroy()
     return 0
