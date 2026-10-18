@@ -49,6 +49,23 @@ class TestBasicCorrectness(unittest.TestCase):
         self.assertEqual(sw, 0)
         self.assertEqual(len(seq), 2)
 
+    def test_t22_json_with_bom(self):
+        """T22 Windows 编辑器常给 JSON 写 BOM；加载器必须能读（utf-8-sig）。"""
+        import json, tempfile
+        from pathlib import Path as _P
+        spec = {"lines": [{"id": "L", "name": "线", "speed_kmh": 40}],
+                "stations": [{"id": "A", "name": "甲", "x": 0, "y": 0},
+                             {"id": "B", "name": "乙", "x": 1, "y": 0}],
+                "edges": [{"u": "A", "v": "B", "line": "L"}]}
+        fd, path = tempfile.mkstemp(suffix=".json")
+        with open(fd, "w", encoding="utf-8-sig") as fh:   # 关键：带 BOM 写
+            json.dump(spec, fh, ensure_ascii=False)
+        try:
+            g = load_graph(path)
+            self.assertEqual(len(g.stations), 2)
+        finally:
+            _P(path).unlink(missing_ok=True)
+
     def test_t02_dual_weight_diverges(self):
         """T02 双权重：慢线更短（6 km/36 min），快线最快（10 km/5 min）。"""
         g = support.dual_weight()
@@ -221,6 +238,49 @@ class TestEdgeCases(unittest.TestCase):
         self.assertEqual(solver.analyze_path(g, ["A"]), (0.0, 0.0, [], 0))
         with self.assertRaises(solver.PathNotFound):
             solver.analyze_path(g, ["A", "A"])
+
+
+class TestLinesAndResolve(unittest.TestCase):
+    def test_t19_result_lines_match_analyze_path(self):
+        """T19 Result.lines 与 analyze_path 一致，且按 lines 累计的指标等于 Result 指标。"""
+        g = demo()
+        for algo in ("dijkstra", "astar"):
+            for a, b in support.all_pairs(g)[:10]:
+                r = solver.solve(g, a, b, algo, "time")
+                _km, _tm, seq, sw = solver.analyze_path(g, r.path)
+                self.assertEqual(r.lines, seq)
+                self.assertEqual(len(r.lines), len(r.path) - 1)
+                self.assertEqual(r.transfers, sw)
+                tot = 0.0
+                for (u, v), ln in zip(zip(r.path, r.path[1:]), r.lines):
+                    edge = next(e for e in g.edge_between(u, v) if e.line == ln)
+                    tot += edge.distance_km
+                self.assertAlmostEqual(r.distance_km, tot, places=3)
+
+    def test_t20_duplicate_names_and_resolve_ambiguity(self):
+        """T20 站名重复必须被拒；resolve 遇到歧义要报错（不能静默取第一个）。"""
+        spec = {"lines": [{"id": "L", "name": "线", "speed_kmh": 40}],
+                "stations": [{"id": "A", "name": "同名", "x": 0, "y": 0},
+                             {"id": "B", "name": "同名", "x": 1, "y": 0}],
+                "edges": [{"u": "A", "v": "B", "line": "L"}]}
+        with self.assertRaises(DataError):
+            support.load_spec(spec)
+        from main import resolve
+        from core.graph import Graph, Station
+        g = Graph()
+        g.stations = {"A": Station("A", "同名", 0.0, 0.0), "B": Station("B", "同名", 1.0, 0.0)}
+        with self.assertRaises(DataError):
+            resolve(g, "同名")
+        self.assertEqual(resolve(g, "A"), "A")
+
+    def test_t21_path_metrics_skips_transfer_hops(self):
+        """T21 path_metrics 对“同站换乘”段按 0 距离/0 时间处理，不再抛异常。"""
+        g = demo()
+        self.assertEqual(g.path_metrics(["S1"]), (0.0, 0.0))
+        km2, tm2 = g.path_metrics(["S2", "S2", "S3"])
+        km, tm = g.path_metrics(["S2", "S3"])
+        self.assertAlmostEqual(km2, km, places=6)
+        self.assertAlmostEqual(tm2, tm, places=6)
 
 
 class TestPickPair(unittest.TestCase):

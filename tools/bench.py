@@ -34,7 +34,7 @@ from core import solver              # noqa: E402
 from core.graph import load_graph    # noqa: E402
 
 FIELDS = ["dataset", "nodes", "edges", "lines", "start", "goal", "algorithm", "weight",
-          "repeat", "expanded", "elapsed_ms", "distance_km", "time_min", "transfers", "path_nodes"]
+          "rounds", "expanded", "elapsed_ms", "distance_km", "time_min", "transfers", "path_nodes"]
 
 
 # ---------------------------------------------------------------- 合成数据集
@@ -130,7 +130,7 @@ def measure(g, pairs, repeats: int, dataset: str, cache: list):
             cache.append({
                 "dataset": dataset, "nodes": len(g.stations), "edges": len(g.edges),
                 "lines": len(g.lines), "start": start, "goal": goal,
-                "algorithm": algo, "weight": weight, "repeat": 1,
+                "algorithm": algo, "weight": weight, "rounds": repeats,
                 "expanded": last.expanded, "elapsed_ms": round(med, 4),
                 "distance_km": last.distance_km, "time_min": last.time_min,
                 "transfers": "—" if last.transfers is None else last.transfers,
@@ -139,11 +139,13 @@ def measure(g, pairs, repeats: int, dataset: str, cache: list):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="A 题基准：Dijkstra / A* / BFS")
-    ap.add_argument("--out", default=str(ROOT / "tools" / "bench.csv"))
+    ap.add_argument("--out", default=str(ROOT / "_smoke" / "bench.csv"),
+                    help="原始 CSV 输出；默认 _smoke/bench.csv（入库版请显式写 tools/）")
     ap.add_argument("--summary-out", default="")
     ap.add_argument("--repeats", type=int, default=5)
     ap.add_argument("--pairs", type=int, default=5)
-    ap.add_argument("--scale", default="", help="规模模式：逗号分隔的站点数，如 15,60,240")
+    ap.add_argument("--scale", default="",
+                    help="规模模式：逗号分隔的站点数（只用内置合成图，忽略 --data），如 15,60,240")
     ap.add_argument("--check-cv", type=float, default=0.0, help="变异系数上限（%），超限退出码 2")
     ap.add_argument("--data", default=str(ROOT / "data" / "demo_city.json"))
     args = ap.parse_args(argv)
@@ -156,7 +158,6 @@ def main(argv=None) -> int:
         for n in [int(x) for x in args.scale.split(",") if x.strip()]:
             cols = max(3, math.ceil(n / max(3, math.ceil(math.sqrt(n)))))
             rows_n = max(3, math.ceil(n / cols))
-            rows = rows  # noqa: F841  (与下方变量名区分)
             spec = grid_spec(rows_n, cols, seed=rows_n * cols)
             g = load_spec(spec, cache_dir)
             dataset = f"grid-{len(g.stations)}"
@@ -176,7 +177,7 @@ def main(argv=None) -> int:
         return 2
 
     out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    out.parent.mkdir(parents=True, exist_ok=True)   # 默认写到 _smoke/，首次运行自动建目录
     with out.open("w", newline="", encoding="utf-8-sig") as fh:
         wr = csv.DictWriter(fh, fieldnames=FIELDS + ["_median", "_cv"], extrasaction="ignore")
         wr.writeheader()

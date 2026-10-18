@@ -34,8 +34,13 @@ COL = {
 
 
 def load_font(size: int):
-    for name in ("msyh.ttc", "msyhbd.ttc", "simhei.ttf", "simsun.ttc"):
-        p = Path(r"C:\Windows\Fonts") / name
+    """按平台挑一个可用字体；找不到就退回 Pillow 默认字体。"""
+    candidates = [Path(r"C:\Windows\Fonts") / n for n in
+                  ("msyh.ttc", "msyhbd.ttc", "simhei.ttf", "simsun.ttc")]
+    candidates += [Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+                   Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+                   Path("/System/Library/Fonts/PingFang.ttc")]
+    for p in candidates:
         if p.exists():
             try:
                 return ImageFont.truetype(str(p), size)
@@ -114,19 +119,24 @@ def bar_chart(out: Path, csv_path: Path):
     if not csv_path.exists():
         return None
     rows = list(csv.DictReader(csv_path.open(encoding="utf-8-sig")))
-    want = [("grid-16", "distance"), ("grid-30", "distance"), ("grid-60", "distance"),
-            ("grid-240", "distance")]
-    data = {}
+    data, nodes, order = {}, {}, []
     for r in rows:
         key = (r["dataset"], r["algorithm"], r["weight"])
         data[key] = (float(r["avg_expanded"]), float(r["median_ms"]))
+        nodes[r["dataset"]] = int(float(r["nodes"]))
+        if r["weight"] == "distance" and r["dataset"] not in order:
+            order.append(r["dataset"])
+    if not order:
+        return None
     W, H = 1400, 820
     img = Image.new("RGB", (W, H), COL["bg"])
     dr = ImageDraw.Draw(img)
     f_t, f_a, f_s = load_font(36), load_font(22), load_font(19)
     dr.text((60, 36), "扩展节点数对比（distance 权重，Dijkstra vs A*）", font=f_t, fill=COL["text"])
     dr.text((60, 88), "数据：tools/bench_summary.csv ｜ A* 省下的扩展比例标注在柱上方", font=f_s, fill=COL["sub"])
-    datasets = [d for d, _ in want]
+    # 优先只用规模图（grid-*），没有就退回全部；按站点数从少到多，最多 6 组
+    scale_order = [d for d in order if d.startswith("grid-")] or order
+    datasets = sorted(scale_order, key=lambda d: nodes.get(d, 0))[:6]
     vals = {d: (data.get((d, "dijkstra", "distance"), (0, 0)),
                 data.get((d, "astar", "distance"), (0, 0))) for d in datasets}
     base_y, plot_h, left = 700, 500, 140

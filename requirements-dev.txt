@@ -1,0 +1,3 @@
+# 开发/工具期依赖（运行时仍为零第三方：标准库 + Tkinter）
+# 仅 tools/make_figs.py 画插图、CanvasView 导出 PNG 时需要
+pillow>=9.0

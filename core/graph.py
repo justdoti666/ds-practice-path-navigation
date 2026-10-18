@@ -81,6 +81,8 @@ class Graph:
         """沿站点序列累加指标；同站换乘按 0 距离/0 时间计（本版简化，见 README）。"""
         dist = time = 0.0
         for a, b in zip(path, path[1:]):
+            if a == b:            # 同站换乘段：0 距离 / 0 时间
+                continue
             cand = self.edge_between(a, b)
             if not cand:
                 raise DataError(f"路径中 {a} → {b} 不存在连接")
@@ -103,6 +105,11 @@ class Graph:
             raise DataError("站点列表为空")
         if len(self.stations) < 2:
             raise DataError("至少需要 2 个站点")
+        names: dict = {}
+        for sid, st in self.stations.items():
+            if st.name in names:
+                raise DataError(f"站名重复：{st.name}（{names[st.name]} 与 {sid}）")
+            names[st.name] = sid
         for e in self.edges:
             if e.u not in self.stations or e.v not in self.stations:
                 raise DataError(f"边引用了不存在的站点: {e.u} - {e.v}")
@@ -167,7 +174,7 @@ def _finish(g: Graph) -> Graph:
 # ---------------------------------------------------------------- JSON 加载
 def load_json(path: Path) -> Graph:
     try:
-        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as exc:
         raise DataError(f"JSON 解析失败（{path}）: {exc}") from exc
     g = Graph(meta=dict(raw.get("meta", {})))

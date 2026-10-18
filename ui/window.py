@@ -40,6 +40,7 @@ class App(tk.Tk):
         self._anim_events: List[str] = []
         self._anim_idx = 0
         self._pending_path: List[str] = []
+        self._pending_lines: List[str] = []
 
         self.title(f"城市交通路径导航模拟器 ｜ {graph.meta.get('name', '示例城市')}")
         self.geometry("1180x720")
@@ -163,11 +164,18 @@ class App(tk.Tk):
                 px, py = self.pts[sid]
                 self.canvas.create_oval(px - 11, py - 11, px + 11, py + 11, outline=color, width=3)
 
-    def _draw_path(self, path: List[str]):
-        for a, b in zip(path, path[1:]):
+    def _draw_path(self, path: List[str], lines: List[str] | None = None):
+        """按路径画线；`lines` 给出每跳所用线路（来自 solver.analyze_path）。
+
+        以前这里每跳取 time_min 最小的边，遇到平行线路会与 Result.transfers 的
+        口径不一致（画 L2、却报 0 次换乘）；现在优先用 lines[i] 指定的边。
+        """
+        for idx, (a, b) in enumerate(zip(path, path[1:])):
             candidates = self.g.edge_between(a, b)
             if candidates:
-                e = min(candidates, key=lambda x: x.time_min)
+                want = lines[idx] if lines and idx < len(lines) else None
+                e = next((x for x in candidates if x.line == want), None) or min(
+                    candidates, key=lambda x: x.time_min)
                 xa, ya = self.pts[a]
                 xb, yb = self.pts[b]
                 self.canvas.create_line(xa, ya, xb, yb, fill=HILITE, width=7,
@@ -195,7 +203,7 @@ class App(tk.Tk):
         self._draw_graph()
         self._mark_endpoints()
         if self.current and self.current.found:
-            self._draw_path(self.current.path)
+            self._draw_path(self.current.path, self.current.lines)
 
     def _sid(self, box: ttk.Combobox) -> str:
         text = box.get()
@@ -258,10 +266,11 @@ class App(tk.Tk):
         if animate:
             self._anim_events = [sid for kind, sid in result.events if kind == "settle"]
             self._pending_path = result.path
+            self._pending_lines = list(result.lines)
             self._anim_idx = 0
             self._step_animation()
         else:
-            self._draw_path(result.path)
+            self._draw_path(result.path, result.lines)
 
     def _step_animation(self):
         if self._anim_idx < len(self._anim_events):
@@ -277,7 +286,7 @@ class App(tk.Tk):
         else:
             self._anim_job = None
             if self._pending_path:
-                self._draw_path(self._pending_path)
+                self._draw_path(self._pending_path, self._pending_lines)
 
     def compare_all(self):
         start, end = self._sid(self.start_box), self._sid(self.end_box)
@@ -305,6 +314,17 @@ class App(tk.Tk):
         self._mark_endpoints()
         if not keep_log:
             self.out.delete("1.0", "end")
+
+    def destroy(self):  # noqa: D401 —— 覆盖 Tk 的销毁：先取消定时器再销毁
+        for job in (getattr(self, "_anim_job", None), getattr(self, "_resize_job", None)):
+            if job is not None:
+                try:
+                    self.after_cancel(job)
+                except tk.TclError:
+                    pass
+        self._anim_job = None
+        self._resize_job = None
+        super().destroy()
 
     def log(self, text: str):
         self.out.insert("end", text + "\n")

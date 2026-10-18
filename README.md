@@ -8,7 +8,7 @@
 | 模块 | 负责人 | 状态 |
 | --- | --- | --- |
 | 数据与图模型（`core/graph.py`、`data/`） | P1 | 原型可用（双格式加载 + 校验），待补 4 组数据集与真实数据接入 |
-| 算法引擎（`core/solver.py`、`tests/`、`tools/bench.py`） | P2 | ✅ **已交付**：契约 1.1.0 · 18 条单测 · 基准 CSV · 3 张流程图 · 报告第 3 章草稿 |
+| 算法引擎（`core/solver.py`、`tests/`、`tools/bench.py`） | P2 | ✅ **已交付**：契约 1.2.0 · 23 条单测 · 基准 CSV · 3 张流程图 · 报告第 3 章草稿 |
 | 界面与交互（`ui/window.py`、`main.py`） | P3 | 原型可用（下拉/点选、状态机、结果面板），待补异常空态与对比面板 |
 | 渲染与工程化（`ui/canvas.py`、`selfcheck.py`、打包） | P4 | 原型可用（绘制/高亮/动画/自检矩阵），待四份任务书对应项 |
 
@@ -20,7 +20,7 @@
 # 1) 自检（退出码 0 = 全过）
 python main.py --check
 
-# 2) 单测（P2：18 条）
+# 2) 单测（P2：23 条）
 python -m unittest discover -s tests -t .
 
 # 3) 界面
@@ -41,7 +41,7 @@ selfcheck.py            自检矩阵（10 组断言，退出码即闸门）
 core/graph.py           图模型 + JSON/TXT 加载 + 校验
 core/solver.py          算法引擎：Dijkstra / A* / 0-1 BFS 最少换乘
 ui/window.py            Tkinter 主窗（控件 / 状态机 / 结果面板）
-ui/canvas.py            画布渲染（P4 目标；当前绘制逻辑在 window.py）
+ui/canvas.py            画布渲染（P4 目标，**尚未创建**；当前绘制逻辑在 window.py）
 data/demo_city.json     示例城市（与 .txt 等价）
 tests/                  P2 单测矩阵（support.py 含独立 oracle）
 tools/bench.py          基准与对比实验（CSV）
@@ -60,7 +60,7 @@ report/                 实验报告草稿（第 3 章 + 第 2 章供稿）
 ## 质量门槛
 
 1. `python main.py --check` 全绿；
-2. `python -m unittest discover -s tests -t .` 全过；
+2. `python -m unittest discover -s tests -t .`（23 条）全过；
 3. `python tools/bench.py --check-cv 15` 通过（CV 中位 ≤ 15%）；
 4. UI 改动附截图（站名不重叠、控件不被裁切）。
 
@@ -80,6 +80,8 @@ report/                 实验报告草稿（第 3 章 + 第 2 章供稿）
 | `report/` | 报告草稿（第 3 章算法 + 第 2 章供稿） |
 
 ## 备注
+
+- 开发期依赖：Pillow（仅 `tools/make_figs.py` 画插图与 PNG 导出）→ `requirements-dev.txt`。
 
 - 运行时零第三方依赖（仅标准库 + Tkinter）；`tools/make_figs.py` 用 Pillow 画插图，属开发期工具。
 - 原始任务书 PDF 未入库（课程材料，仅本地保留）。

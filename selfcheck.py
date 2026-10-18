@@ -70,7 +70,11 @@ def brute_min_transfers(g: Graph, s: str, t: str):
     return best[0]
 
 
-def check(out) -> int:
+class _Skip(Exception):
+    """当前数据集不适用某项检查（例如只有一份数据、或没有"最快≠最短"的点对）。"""
+
+
+def check(out, cross_format: bool = True) -> int:
     fails = 0
 
     def case(name: str, fn):
@@ -78,6 +82,8 @@ def check(out) -> int:
         try:
             detail = fn()
             print(f"  PASS  {name}" + (f"  [{detail}]" if detail else ""))
+        except _Skip as exc:
+            print(f"  SKIP  {name}  [{exc}]")
         except AssertionError as exc:
             fails += 1
             print(f"  FAIL  {name}: {exc}")
@@ -87,20 +93,23 @@ def check(out) -> int:
 
     print("\n[1] 数据加载：JSON 与 TXT 必须等价")
     gj = load_graph(DATA_JSON)
-    gt = load_graph(DATA_TXT)
+    if cross_format:
+        gt = load_graph(DATA_TXT)
 
-    def same_graph():
-        assert sorted(gj.stations) == sorted(gt.stations), "站点集合不同"
-        assert len(gj.edges) == len(gt.edges), f"边数不同 {len(gj.edges)} vs {len(gt.edges)}"
-        for a, b in pairs(gj):
-            for w in ("time", "distance"):
-                rj = solver.dijkstra(gj, a, b, w)
-                rt = solver.dijkstra(gt, a, b, w)
-                assert abs(rj.time_min - rt.time_min) < 1e-9, f"{a}-{b} 时间不等"
-                assert abs(rj.distance_km - rt.distance_km) < 1e-9, f"{a}-{b} 距离不等"
-        return f"{len(gj.stations)} 站 / {len(gj.edges)} 边 / {len(gj.lines)} 线"
+        def same_graph():
+            assert sorted(gj.stations) == sorted(gt.stations), "站点集合不同"
+            assert len(gj.edges) == len(gt.edges), f"边数不同 {len(gj.edges)} vs {len(gt.edges)}"
+            for a, b in pairs(gj):
+                for w in ("time", "distance"):
+                    rj = solver.dijkstra(gj, a, b, w)
+                    rt = solver.dijkstra(gt, a, b, w)
+                    assert abs(rj.time_min - rt.time_min) < 1e-9, f"{a}-{b} 时间不等"
+                    assert abs(rj.distance_km - rt.distance_km) < 1e-9, f"{a}-{b} 距离不等"
+            return f"{len(gj.stations)} 站 / {len(gj.edges)} 边 / {len(gj.lines)} 线"
 
-    case("两种格式实现同一张图（全点对 × 两权重）", same_graph)
+        case("两种格式实现同一张图（全点对 × 两权重）", same_graph)
+    else:
+        print("  SKIP  只给了一份数据（--no-cross-format），跳过跨格式对拍")
 
     print("\n[2] 手算基线：3 站点小图")
     tmp = Path(tempfile.mkdtemp()) / "tiny.json"
@@ -160,20 +169,25 @@ def check(out) -> int:
 
     print("\n[5] 多准则：最快路径 ≠ 最短路径")
     def multicriteria():
-        t = solver.dijkstra(gj, "S4", "S11", "time")
-        d = solver.dijkstra(gj, "S4", "S11", "distance")
-        assert t.path != d.path, f"两条路径相同：{t.path}"
-        assert d.distance_km < t.distance_km, "最短距离应小于最快路径的距离"
-        assert t.time_min < d.time_min, "最快时间应小于最短路径的时间"
-        return f"最快 {t.time_min:.2f}min/{t.distance_km:.2f}km vs 最短 {d.time_min:.2f}min/{d.distance_km:.2f}km"
+        for a, b in pairs(gj):
+            t = solver.dijkstra(gj, a, b, "time")
+            d = solver.dijkstra(gj, a, b, "distance")
+            if t.path == d.path:
+                continue
+            assert d.distance_km < t.distance_km, "最短距离应小于最快路径的距离"
+            assert t.time_min < d.time_min, "最快时间应小于最短路径的时间"
+            return (f"{a}->{b}: 最快 {t.time_min:.2f}min/{t.distance_km:.2f}km vs "
+                    f"最短 {d.time_min:.2f}min/{d.distance_km:.2f}km")
+        raise _Skip("本数据集中最快与最短恰好总走同一条路")
 
     case("同一起终点两种口径给出不同解", multicriteria)
 
     print("\n[6] 边界与异常")
     def same_station():
-        r = solver.dijkstra(gj, "S1", "S1", "time")
-        assert r.path == ["S1"] and r.distance_km == 0.0 and r.time_min == 0.0, f"{r.path} {r.distance_km}"
-        return "起终点相同 → 0 距离 0 时间"
+        sid = sorted(gj.stations)[0]
+        r = solver.dijkstra(gj, sid, sid, "time")
+        assert r.path == [sid] and r.distance_km == 0.0 and r.time_min == 0.0, f"{r.path} {r.distance_km}"
+        return f"{sid} 起终点相同 → 0 距离 0 时间"
 
     case("起终点相同", same_station)
 
@@ -226,10 +240,11 @@ def check(out) -> int:
     case("非法数据在加载阶段被拒", bad_data)
 
     def bad_args():
+        s1, s2 = sorted(gj.stations)[:2]
         for fn, label in (
-            (lambda: solver.solve(gj, "S1", "S2", "nope"), "未知算法"),
-            (lambda: solver.solve(gj, "S1", "S2", "dijkstra", "nope"), "未知权重"),
-            (lambda: solver.dijkstra(gj, "S1", "XX"), "站点不存在"),
+            (lambda: solver.solve(gj, s1, s2, "nope"), "未知算法"),
+            (lambda: solver.solve(gj, s1, s2, "dijkstra", "nope"), "未知权重"),
+            (lambda: solver.dijkstra(gj, s1, "NOT_A_STATION"), "站点不存在"),
         ):
             try:
                 fn()
@@ -249,11 +264,13 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="A 题算法自检")
     ap.add_argument("--json", default=str(DATA_JSON))
     ap.add_argument("--txt", default=str(DATA_TXT))
+    ap.add_argument("--no-cross-format", action="store_true",
+                    help="只有一份数据时跳过“JSON/TXT 等价”对拍")
     args = ap.parse_args(argv)
     globals()["DATA_JSON"] = Path(args.json)
     globals()["DATA_TXT"] = Path(args.txt)
     print(f"data: {args.json} / {args.txt}")
-    return 0 if check(sys.stdout) == 0 else 1
+    return 0 if check(sys.stdout, cross_format=not args.no_cross_format) == 0 else 1
 
 
 if __name__ == "__main__":

@@ -44,6 +44,7 @@ class Result:
     algorithm: str
     found: bool
     path: List[str] = field(default_factory=list)
+    lines: List[str] = field(default_factory=list)   # 每跳所用线路（与 path 等长-1），供画线/标注
     distance_km: float = 0.0
     time_min: float = 0.0
     transfers: Optional[int] = None
@@ -124,8 +125,10 @@ def analyze_path(g: Graph, path: List[str]) -> Tuple[float, float, List[str], in
 
 def _result(g: Graph, algorithm: str, path: List[str], expanded: int,
             elapsed_ms: float, events: List[Tuple[str, str]], note: str = "") -> Result:
-    km, tm, _lines, sw = analyze_path(g, path)
-    return Result(algorithm, True, path, km, tm, sw, expanded, round(elapsed_ms, 3), events, note)
+    km, tm, lines_seq, sw = analyze_path(g, path)
+    return Result(algorithm=algorithm, found=True, path=path, lines=lines_seq,
+                  distance_km=km, time_min=tm, transfers=sw, expanded=expanded,
+                  elapsed_ms=round(elapsed_ms, 3), events=events, note=note)
 
 
 # ------------------------------------------------------------------ Dijkstra
@@ -221,9 +224,10 @@ def bfs_transfers(g: Graph, start: str, goal: str) -> Result:
     正确性：0-1 BFS 的出队顺序按代价非降 ⇒ 首次弹出 goal 状态即为最小换乘数。
     扩展计数口径与 Dijkstra 一致（每弹出并处理一个状态记 1，注意单位是**状态**不是站点）。
     """
-    _check(g, start, goal, "time")
+    _check_stations(g, start, goal)
     if start == goal:
-        return Result("BFS(最少换乘)", True, [start], 0.0, 0.0, 0, 1, 0.0, [("settle", start)])
+        return Result(algorithm="BFS(最少换乘)", found=True, path=[start], lines=[],
+                      transfers=0, expanded=1, elapsed_ms=0.0, events=[("settle", start)])
     t0 = time.perf_counter()
     station_lines = g.lines_of_station()
     if not station_lines.get(start):
@@ -288,6 +292,12 @@ def _rebuild(prev: Dict[str, str], start: str, goal: str) -> List[str]:
         path.append(prev[path[-1]])
     path.reverse()
     return path
+
+
+def _check_stations(g: Graph, start: str, goal: str) -> None:
+    """只校验站点（BFS 没有权重概念，不该顺手校验 weight）。"""
+    if start not in g.stations or goal not in g.stations:
+        raise DataError(f"起终点不在图中: {start} / {goal}")
 
 
 def _check(g: Graph, start: str, goal: str, weight: str) -> None:

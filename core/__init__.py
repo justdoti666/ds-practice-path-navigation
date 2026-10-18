@@ -7,4 +7,4 @@
   * 任何变更都要在 docs/契约变更.md 记一笔（谁/何时/为什么/影响面）。
 """
 
-CONTRACT_VERSION = "1.1.0"      # P2 新增 astar(heuristic=...)（向后兼容）；其余不变
+CONTRACT_VERSION = "1.2.0"      # 1.2.0：Result 增加 lines；BFS 不再校验 weight；加载期站名查重

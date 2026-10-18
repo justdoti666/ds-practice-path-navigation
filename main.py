@@ -27,11 +27,14 @@ DEFAULT_DATA = ROOT / "data" / "demo_city.json"
 
 
 def resolve(g: Graph, token: str) -> str:
+    """把 id 或站名解析成 id；同名时明确报歧义（不能静默取第一个）。"""
     if token in g.stations:
         return token
-    for st in g.stations.values():
-        if st.name == token:
-            return st.sid
+    hits = [sid for sid, st in g.stations.items() if st.name == token]
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        raise DataError(f"站名「{token}」对应多个站点，请改用站点 id：{', '.join(sorted(hits))}")
     raise DataError(f"找不到站点：{token}（可用 id 或站点全名）")
 
 
@@ -97,7 +100,20 @@ def main(argv=None) -> int:
 
     if args.check:
         import selfcheck
-        return selfcheck.main(["--json", args.data, "--txt", str(ROOT / "data" / "demo_city.txt")])
+
+        # --data 只是“一份数据”，不能拿它和固定的 demo_city.txt 对拍。
+        # 若同目录存在同名的另一种格式，就成对校验；否则跳过“跨格式等价”这一项。
+        json_path, txt_path = str(ROOT / "data" / "demo_city.json"), str(ROOT / "data" / "demo_city.txt")
+        extra: list[str] = []
+        if args.data:
+            p = Path(args.data).resolve()
+            sibling = p.with_suffix(".txt" if p.suffix.lower() == ".json" else ".json")
+            if sibling.exists():
+                json_path, txt_path = (str(p), str(sibling)) if p.suffix.lower() == ".json" else (str(sibling), str(p))
+            else:
+                json_path, txt_path = str(p), ""
+                extra.append("--no-cross-format")
+        return selfcheck.main(["--json", json_path, "--txt", txt_path] + extra)
 
     try:
         g = load_graph(args.data)
