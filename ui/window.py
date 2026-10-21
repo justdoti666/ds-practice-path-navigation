@@ -1451,10 +1451,23 @@ def build_window(
 
 
 # ---------------------------------------------------------------- 入口适配
+def create_window(root: tk.Tk, graph=None):
+    """建窗：有 graph 用它（--data 生效），没有才回退到默认 demo。"""
+    if graph is None:
+        return build_window(root, data_dir=None)
+    from ui.p3_compat import _as_compat
+
+    bench_path = Path(__file__).resolve().parent.parent / "tools" / "bench.csv"
+    rows, status = load_bench_rows(bench_path)
+    window = MainWindow(root, _as_compat(graph), bench_rows=rows, bench_status=status)
+    root.protocol("WM_DELETE_WINDOW", window.close)
+    return window
+
+
 def run_gui(graph=None) -> int:
-    """main.py 的 GUI 入口（真实数据默认 data/demo_city.json）。"""
+    """main.py 的 GUI 入口：把 --data 加载好的图直接交给窗口，而不是重新读默认 demo。"""
     root = tk.Tk()
-    build_window(root, data_dir=None)
+    create_window(root, graph)
     root.mainloop()
     return 0
 
