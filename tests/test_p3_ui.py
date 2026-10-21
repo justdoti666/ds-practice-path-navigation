@@ -19,10 +19,17 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+try:
+    import tkinter  # noqa: F401
+    HAS_TK = True
+except Exception:          # Linux CI 可能没装 Tk；没有 Tk 就跳过界面用例
+    HAS_TK = False
+
 from core import solver as real_solver  # noqa: E402
 from core.graph import Edge, Station  # noqa: E402
 from ui.p3_compat import Graph, load_graph  # noqa: E402
-from ui.window import (  # noqa: E402
+if HAS_TK:
+    from ui.window import (  # noqa: E402
     Controller,
     DataError,
     DisconnectedError,
@@ -85,6 +92,7 @@ def ready_controller(fake: FakeSolver | None = None, graph: Graph | None = None)
 # ---------------------------------------------------------------------------
 # 1. 状态机主流程
 # ---------------------------------------------------------------------------
+@unittest.skipUnless(HAS_TK, "tkinter 不可用，跳过界面用例")
 class TestStateMachine(unittest.TestCase):
     def test_happy_path_transitions(self) -> None:
         controller = ready_controller()
@@ -155,6 +163,7 @@ class TestStateMachine(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # 2. 四类异常
 # ---------------------------------------------------------------------------
+@unittest.skipUnless(HAS_TK, "tkinter 不可用，跳过界面用例")
 class TestErrorBranches(unittest.TestCase):
     def test_missing_selection_raises(self) -> None:
         controller = Controller(make_graph())
@@ -210,6 +219,7 @@ class TestErrorBranches(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # 3. 下拉框文案
 # ---------------------------------------------------------------------------
+@unittest.skipUnless(HAS_TK, "tkinter 不可用，跳过界面用例")
 class TestStationLabels(unittest.TestCase):
     def test_label_roundtrip(self) -> None:
         label = station_label("人民广场", "S02")
@@ -228,6 +238,7 @@ class TestStationLabels(unittest.TestCase):
 # 4. 三算法对比与 bench 同源
 # ---------------------------------------------------------------------------
 @unittest.skipUnless((ROOT / "data" / "bench.csv").exists(), "缺少 data/bench.csv")
+@unittest.skipUnless(HAS_TK, "tkinter 不可用，跳过界面用例")
 class TestComparePanel(unittest.TestCase):
     def setUp(self) -> None:
         self.graph = load_graph(ROOT / "data")
@@ -267,6 +278,7 @@ class TestComparePanel(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # 5. 真 solver 冒烟（确保换实现后接口没断）
 # ---------------------------------------------------------------------------
+@unittest.skipUnless(HAS_TK, "tkinter 不可用，跳过界面用例")
 class TestRealSolverSmoke(unittest.TestCase):
     def test_real_solver_through_controller(self) -> None:
         graph = make_graph()
