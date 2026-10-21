@@ -754,6 +754,12 @@ class CanvasView(tk.Canvas):
     CONFIGURE_DEBOUNCE_MS = 120   # 窗口尺寸变化后等 120ms 再重绘
     HIT_RADIUS = 12               # 点击命中站点的像素半径（验收要求 ≤12px）
 
+    # --- 站名显示策略（1× 全图只显示关键站，放大逐级放开） ---
+    LABEL_CAP_BASE = 18           # 标签预算 = BASE + PER_ZOOM * zoom
+    LABEL_CAP_PER_ZOOM = 34
+    LABEL_FONT_MAIN = 9           # 主字号：不再降到 6pt 硬塞
+    LABEL_FONT_FALLBACK = 8
+
     def __init__(
         self,
         parent: tk.Misc,
@@ -779,6 +785,7 @@ class CanvasView(tk.Canvas):
         self._graph_raw = graph
         self.draw_graph = normalise_graph(graph)
         self.show_labels = bool(show_labels)
+        self._label_show_all = False
         self._transform = ViewTransform(self.draw_graph.bbox, width, height)
 
         # --- 交互状态 ---
@@ -1558,6 +1565,43 @@ class CanvasView(tk.Canvas):
             last = sid
         return rects
 
+    # -------------------------------------------------------- 站名显示策略
+    def _display_name(self, name: str) -> str:
+        """长站名截断（hover 仍显示全名），减少标签面积。"""
+        return name if len(name) <= 6 else name[:5] + "…"
+
+    def _line_endpoints(self) -> set[str]:
+        out: set[str] = set()
+        for line in self.draw_graph.lines:
+            ids = list(line.station_ids)
+            if ids:
+                out.add(ids[0])
+                out.add(ids[-1])
+        return out
+
+    def _label_budget(self) -> int:
+        n = len(self.draw_graph.stations)
+        zoom = getattr(self._transform, "zoom", 1.0) or 1.0
+        return max(12, min(n, int(self.LABEL_CAP_BASE + self.LABEL_CAP_PER_ZOOM * zoom)))
+
+    def _label_visible(self, sid: str, path_ids: set, start, end, endpoints: set) -> bool:
+        """1× 只显示起终点/路径/换乘/线路端点；放大后逐级放开。"""
+        if getattr(self, "_label_show_all", False):
+            return True
+        if sid in (start, end) or sid in path_ids:
+            return True
+        if self.draw_graph.is_transfer(sid) or sid in endpoints:
+            return True
+        zoom = getattr(self._transform, "zoom", 1.0) or 1.0
+        if zoom >= 1.35 and len(self.draw_graph.station_lines.get(sid, ())) >= 3:
+            return True
+        return zoom >= 2.2
+
+    def set_label_show_all(self, flag: bool) -> None:
+        """可选开关：True 时忽略 LOD，尽量显示全部站名（答辩/截图用）。"""
+        self._label_show_all = bool(flag)
+        self.refresh()
+
     def _layout_station_labels(
         self, font_size: int, path: PathView | None
     ) -> tuple[list[_PlacedLabel], list[str]]:
@@ -1615,13 +1659,20 @@ class CanvasView(tk.Canvas):
 
         placed: list[_PlacedLabel] = []
         hidden: list[str] = []
+        endpoints = self._line_endpoints()
+        budget = self._label_budget()
         for sid in sorted(self.draw_graph.stations, key=priority):
+            if len(placed) >= budget:
+                break                     # 预算用尽：普通站不再参与排版
+            if not self._label_visible(sid, path_ids, start, end, endpoints):
+                continue                  # LOD：1× 只显示关键站
             station = self.draw_graph.stations[sid]
             px, py = self._screen[sid]
             is_transfer = self.draw_graph.is_transfer(sid)
             on_path = sid in path_ids
             bold = is_transfer or sid in (start, end)
-            measured_w, measured_h = self._text_size(station.name, font_size, bold)
+            display_name = self._display_name(station.name)
+            measured_w, measured_h = self._text_size(display_name, font_size, bold)
             text_w = measured_w + 4.0
             text_h = max(measured_h, 11.0) + 1.0
 
@@ -1649,7 +1700,7 @@ class CanvasView(tk.Canvas):
                 hidden.append(sid)
                 continue
             placed.append(
-                _PlacedLabel(station.name, chosen, sid, font_size, bold, color, leader)
+                _PlacedLabel(display_name, chosen, sid, font_size, bold, color, leader)
             )
             index.add(chosen)
 
@@ -1669,10 +1720,9 @@ class CanvasView(tk.Canvas):
             return
 
         best: tuple[list[_PlacedLabel], list[str], int] | None = None
-        # 空间够用时 8 号字只排一次；只有省略比例较高（>12%）才降字号重试，
-        # 否则每次平移都要排三遍，134 站地图会明显卡顿。
-        tolerant = max(6, int(len(self.draw_graph.stations) * 0.12))
-        for size in (8, 7, 6):
+        # 只用 9/8 两档：宁可少显示，也不把字号降到 6pt 变成“一堵字墙”。
+        tolerant = max(4, int(len(self.draw_graph.stations) * 0.08))
+        for size in (self.LABEL_FONT_MAIN, self.LABEL_FONT_FALLBACK):
             placed, hidden = self._layout_station_labels(size, path)
             if best is None or len(hidden) < len(best[1]):
                 best = (placed, hidden, size)

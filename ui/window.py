@@ -986,7 +986,7 @@ class MainWindow:
         self._log(
             f"完成：{len(result.path)} 站 · {result.distance_km:.1f} km · "
             f"{result.time_min:.0f} min · 换乘 {result.transfers} 次 · "
-            f"扩展 {result.expanded} · {result.elapsed_ms:.1f} ms"
+            f"扩展 {result.expanded} · {result.elapsed_ms:.2f} ms"
         )
         self._play_animation()
 
@@ -1151,7 +1151,7 @@ class MainWindow:
             "min": f"{result.time_min:.0f}",
             "transfers": f"{result.transfers}",
             "expanded": f"{result.expanded}",
-            "elapsed": f"{result.elapsed_ms:.1f}",
+            "elapsed": f"{result.elapsed_ms:.2f}",
         }
         for key, text in values.items():
             self.metric_values[key].configure(text=text)
@@ -1225,7 +1225,7 @@ class MainWindow:
                     f"{result.time_min:.0f}",
                     f"{result.transfers}",
                     f"{result.expanded}",
-                    f"{result.elapsed_ms:.1f}",
+                    f"{result.elapsed_ms:.2f}",
                     check,
                 )
                 value = (
@@ -1390,7 +1390,7 @@ class MainWindow:
         lines.append(
             f"里程 {result.distance_km:.1f} km ｜ 时间 {result.time_min:.0f} min ｜ "
             f"换乘 {result.transfers} 次 ｜ 扩展 {result.expanded} ｜ "
-            f"耗时 {result.elapsed_ms:.1f} ms"
+            f"耗时 {result.elapsed_ms:.2f} ms"
         )
         self.root.clipboard_clear()
         self.root.clipboard_append("\n".join(lines))
