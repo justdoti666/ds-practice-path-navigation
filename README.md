@@ -85,3 +85,15 @@ report/                 实验报告草稿（第 3 章 + 第 2 章供稿）
 
 - 运行时零第三方依赖（仅标准库 + Tkinter）；`tools/make_figs.py` 用 Pillow 画插图，属开发期工具。
 - 原始任务书 PDF 未入库（课程材料，仅本地保留）。
+
+## 界面（P3 整合，2026-10-18）
+
+主界面已切换为 P3 的窗口实现（`ui/window.py` + `ui/widgets.py`），画布用 P4 的
+`CanvasView`（vendored 到 `ui/p4_canvas.py`，P2 写了 `ui/canvas.py` 适配层）。
+
+```powershell
+python main.py                       # 打开界面（P3 主窗）
+python main.py --smoke _smoke/ui.ps   # 无人工冒烟：建窗→搜索→导出画布
+```
+
+P3 的交付说明、11 张截图与第 4 章草稿在 `docs/P3/`；适配细节见 `docs/P3/整合说明.md`。
