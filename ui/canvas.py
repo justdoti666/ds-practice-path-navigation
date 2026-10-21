@@ -79,6 +79,7 @@ class CanvasView(_P4Canvas):
         self._source_graph = graph
         super().__init__(parent, _CanvasGraph(graph), **kwargs)
         self._selection = (None, None)
+        self._done_job = None
 
     def set_graph(self, graph) -> None:      # P4 的签名：set_graph(self, graph)
         self._source_graph = graph
@@ -116,4 +117,13 @@ class CanvasView(_P4Canvas):
     def animate(self, result, speed_level: int = 1, on_done=None):
         super().animate(result, speed_level)
         if on_done is not None:
-            self.after(self.animation_duration_ms(result, speed_level), on_done)
+            self._done_job = self.after(self.animation_duration_ms(result, speed_level), on_done)
+
+    def destroy(self):
+        if self._done_job is not None:
+            try:
+                self.after_cancel(self._done_job)
+            except Exception:
+                pass
+            self._done_job = None
+        super().destroy()
