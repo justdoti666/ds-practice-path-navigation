@@ -496,9 +496,24 @@ def _segment_metrics(draw_graph: DrawGraph, graph: object, a: str, b: str) -> tu
     结果对象自带每段时间/里程时就以结果为准；只有在结果只给了站点序列时，
     才用这里的公式兜底。公式和 P2 的乘车时间一致：
         时间 = 距离 / 速度 * 60 + 停站时间
+
+    注意：优先用 **数据层 graph.stations 的原始坐标** 算距离，而不是
+    draw_graph 的显示坐标——显示层可能为了不重叠改用示意布局（见
+    ``ui/display_layout.py``），若拿示意坐标算 km 会把界面标注数值带偏；
+    算法/data 的数值必须保持原样（界面里程、时间要和搜索结果一致）。
+    ``ui.canvas._CanvasGraph`` 会把真实站点放 ``source_stations`` 上，
+    这里一并兼容，双重保险。
     """
     sa, sb = draw_graph.stations[a], draw_graph.stations[b]
-    km = math.hypot(sa.x - sb.x, sa.y - sb.y)
+    raw_stations = _get(graph, "source_stations", "stations", default=None)
+    if isinstance(raw_stations, dict) and a in raw_stations and b in raw_stations:
+        ra, rb = raw_stations[a], raw_stations[b]
+        try:
+            km = math.hypot(float(ra.x) - float(rb.x), float(ra.y) - float(rb.y))
+        except (AttributeError, TypeError, ValueError):
+            km = math.hypot(sa.x - sb.x, sa.y - sb.y)
+    else:
+        km = math.hypot(sa.x - sb.x, sa.y - sb.y)
     speed = float(_get(graph, "speed_kmh", "speed", default=35.0) or 35.0)
     dwell = float(_get(graph, "dwell_minutes", "dwell", default=0.6) or 0.6)
     minutes = km / speed * 60.0 + dwell if speed > 0 else km
@@ -1338,7 +1353,17 @@ class CanvasView(tk.Canvas):
         return max(1.4, base * factor)
 
     def _station_radius(self) -> float:
-        return _clamp(3.5 * (self._transform.zoom ** 0.35), 2.4, 5.6)
+        """站点半径：随缩放增大；站点很多（169/164 站）时整体缩小一点。
+
+        大图适配到画布后相邻站间距只有十几个像素，如果站点圆点还是 1× 尺寸，
+        圆点会互相挤在一起、"抢"掉线路颜色的可见度；按站点数做一档收缩，
+        让小图（demo 10 站）保持原样、大图更清爽。
+        """
+        radius = _clamp(3.5 * (self._transform.zoom ** 0.35), 2.4, 5.6)
+        count = len(getattr(self.draw_graph, "stations", ()) or ())
+        if count > 80:
+            radius *= max(0.68, min(1.0, math.sqrt(80.0 / count)))
+        return radius
 
     def _path_width(self) -> float:
         return _clamp(6.0 * (self._transform.zoom ** 0.35), 4.0, 10.0)
@@ -1348,37 +1373,120 @@ class CanvasView(tk.Canvas):
 
         * 先画白色“描边”，再画彩色线，交叉处更容易分辨；
         * 环线首尾相连；
-        * 接驳线/支线用虚线。
+        * 接驳线/支线用虚线；
+        * **并行走廊**：两条线路共用同一对相邻站（如 2/7 号线的
+          “广州南站-石壁”）时，把重合的那一段各自向两侧偏移、画成小弧线，
+          避免两种线色完全压在一起（否则会违反“线路不重叠”的验收）。
         """
+        corridors = self._shared_corridors()
         # 环线、接驳线先画，普通线后画，保证主要线路压在上面
         ordered = sorted(self.draw_graph.lines, key=lambda l: (not l.loop, not l.feeder))
         for line in ordered:
             if len(line.station_ids) < 2:
                 continue
-            points: list[float] = []
-            for sid in line.station_ids:
-                if sid not in self._screen:
-                    continue
-                points.extend(self._screen[sid])
-            if len(points) < 4:
-                continue
-            if line.loop and line.station_ids:
-                first = self._screen.get(line.station_ids[0])
-                if first:
-                    points.extend(first)
-
             width = self._line_width(line)
             common = {
                 "capstyle": "round",
                 "joinstyle": "round",
                 "tags": ("network", f"line:{line.id}"),
             }
-            # 白色描边让线路在网格和交叉处更清楚
-            self.create_line(*points, fill=CARD, width=width + 2.6, **common)
-            if line.feeder:
-                self.create_line(*points, fill=line.color, width=width, dash=FEEDER_DASH, **common)
+            for points in self._line_draw_parts(line, corridors):
+                if len(points) < 4:
+                    continue
+                # 白色描边让线路在网格和交叉处更清楚
+                self.create_line(*points, fill=CARD, width=width + 2.6, **common)
+                if line.feeder:
+                    self.create_line(*points, fill=line.color, width=width,
+                                     dash=FEEDER_DASH, **common)
+                else:
+                    self.create_line(*points, fill=line.color, width=width, **common)
+
+    def _shared_corridors(self) -> dict[tuple[str, str], tuple[list[str], float]]:
+        """找出被多条线路共用的相邻站对（并行走廊）。
+
+        返回 ``{(站点A, 站点B): (线路 id 列表, 轨道间距 px)}``；没有共享段时是空 dict。
+        同一对站点在两线站序中方向可能相反，这里统一按 (A<B) 规范化。
+        """
+        owners: dict[tuple[str, str], list[str]] = {}
+        for line in self.draw_graph.lines:
+            seq = list(line.station_ids)
+            if line.loop and len(seq) > 2:
+                seq = seq + [seq[0]]
+            for a, b in zip(seq, seq[1:]):
+                key = (a, b) if a <= b else (b, a)
+                owners.setdefault(key, []).append(line.id)
+        by_id = {line.id: line for line in self.draw_graph.lines}
+        corridors: dict[tuple[str, str], tuple[list[str], float]] = {}
+        for key, ids in owners.items():
+            line_ids = sorted(set(ids))
+            if len(line_ids) < 2:
+                continue
+            max_width = max(self._line_width(by_id[lid]) for lid in line_ids if lid in by_id)
+            # 轨道间距：两条彩色线之间留 ~3px 空隙，白色描边也不会盖住邻居
+            corridors[key] = (line_ids, max_width + 3.2)
+        return corridors
+
+    def _line_draw_parts(self, line, corridors: dict) -> list[list[float]]:
+        """把一条线路拆成若干段屏幕折线：普通段连成一条，并行走廊段画成小弧。"""
+        seq = [sid for sid in line.station_ids if sid in self._screen]
+        if line.loop and len(seq) > 2:
+            seq = seq + [seq[0]]
+        if len(seq) < 2:
+            return []
+
+        parts: list[list[float]] = []
+        current: list[float] = []
+        for a, b in zip(seq, seq[1:]):
+            pa, pb = self._screen[a], self._screen[b]
+            key = (a, b) if a <= b else (b, a)
+            corridor = corridors.get(key)
+            lane = -1
+            if corridor is not None:
+                owners, _step = corridor
+                if line.id in owners:
+                    lane = owners.index(line.id)
+
+            if lane < 0:
+                if not current:
+                    current = [pa[0], pa[1]]
+                current.extend([pb[0], pb[1]])
+                continue
+
+            owners, step = corridor
+            offset = (lane - (len(owners) - 1) / 2.0) * step
+            if abs(offset) > 1e-9:
+                # 规范方向 A->B 的屏幕法线，保证方向相反的线路也分到两侧
+                p0, p1 = self._screen[key[0]], self._screen[key[1]]
+                dx, dy = p1[0] - p0[0], p1[1] - p0[1]
+                norm = math.hypot(dx, dy) or 1.0
+                nx, ny = -dy / norm, dx / norm
+                if current:
+                    current.extend([pa[0], pa[1]])
+                    parts.append(current)
+                    current = []
+                parts.append(self._arc_points(pa, pb, nx, ny, offset))
             else:
-                self.create_line(*points, fill=line.color, width=width, **common)
+                if not current:
+                    current = [pa[0], pa[1]]
+                current.extend([pb[0], pb[1]])
+
+        if len(current) >= 4:
+            parts.append(current)
+        return [part for part in parts if len(part) >= 4]
+
+    def _arc_points(self, pa, pb, nx: float, ny: float, offset: float,
+                    samples: int = 12) -> list[float]:
+        """二次贝塞尔小弧：两端仍精确落在站点上，中点向法线方向偏移 offset px。"""
+        mx = (pa[0] + pb[0]) / 2.0 + nx * offset * 2.0
+        my = (pa[1] + pb[1]) / 2.0 + ny * offset * 2.0
+        points: list[float] = []
+        for i in range(samples + 1):
+            t = i / samples
+            u = 1.0 - t
+            x = u * u * pa[0] + 2.0 * u * t * mx + t * t * pb[0]
+            y = u * u * pa[1] + 2.0 * u * t * my + t * t * pb[1]
+            points.extend((x, y))
+        return points
 
     def _draw_stations(self) -> None:
         """站点：普通站画圆点，换乘站画菱形（和线路圆点区分开）。"""

@@ -97,3 +97,62 @@ python main.py --smoke _smoke/ui.ps   # 无人工冒烟：建窗→搜索→导�
 ```
 
 P3 的交付说明、11 张截图与第 4 章草稿在 `docs/P3/`；适配细节见 `docs/P3/整合说明.md`。
+
+## 169/164 站显示层示意布局（2026-10-24 修复）
+
+> 用户验收口径：「164 个节点时每个路线不重叠」。
+
+### 现象与根因
+
+`data/real_metro.json`（169 站）的站坐标由 `tools/import_metro.py` 按「每条线一条水平带、
+x=站序×1.5、y=线序×8、换乘站取首次出现坐标」生成。换乘站被合并到其它线路坐标后，同一线路
+相邻站之间出现 8~64 km 的「跳跃直线」——188 条边中 45 条 >10 km，实测 460 处非相邻线段交叉，
+运行时线路在画布中央糊成一束、互相压盖（基线证据：`docs/布局修复证据/README.md`）。
+
+### 方案（只动显示层，不动数据 / 算法 / 交互）
+
+新增 `ui/display_layout.py`（纯标准库，仅显示用）：
+
+- `station_positions(graph, line_sequences)`：优先读 `graph.meta['display_layout']`（预生成布局注入口）；
+  `needs_schematic_layout()` 判定为「生成器线性近似坐标」时用 `schematic_layout()` 重算示意坐标
+  （BFS 全对距离 → 最远点采样 pivot → PivotMDS → 力导向细化）；否则返回数据坐标（10 站 demo 不触发）。
+  并行线段的判定与分离使用「与书写方向无关的投影 + 最近点对方向 + 自适应阻尼后处理」，避免反向近平行漏判。
+- `ui/canvas.py::_CanvasGraph` 用显示坐标构造 `_DisplayStation` 代理（不改 P1 的 `core.Station`，
+  A* 启发式仍用数据坐标，算法数值不变）。
+- `ui/p4_canvas.py` 两处：`_segment_metrics` 改用数据层坐标算 km/min（界面分段标注与算法一致）；
+  `_draw_lines` 对「多条线路共用同一对相邻站」的并行走廊向两侧偏移画小弧线
+  （2/7 号线 广州南站—石壁）。
+
+### 验证命令
+
+```powershell
+$py = "python"
+& $py main.py --check                                    # 自检：ALL PASS
+& $py -m unittest discover -s tests -t .                 # 单测：68 条，OK (skipped=3 为 bench 数据预存在跳过)
+& $py main.py --smoke _smoke/metro.ps --data data/real_metro.json
+& $py main.py --smoke _smoke/stress164.ps --data data/stress_164.json
+& $py tools/layout_report.py --out _reports              # 布局几何独立验证（169/164/demo）
+& $py tools/export_canvas.py --data data/real_metro.json --start S001 --end S169 `
+    --png out.png --no-animation                         # 截图（P4-06 导出脚本）
+```
+
+### 验收结果（主验收目标：169 站）
+
+> 用户最终口径：「不用太复杂，只需要 169 节点即可」——**169 站为最终验收目标**；
+> 164 站与随机线网属附加鲁棒性验证，不阻塞。
+
+- **169 站（`data/real_metro.json`，主验收）**：并行重叠 10→0（lead 统一口径，正常交叉不计）、
+  跨线近重合(3px) 22→0、交叉 434→2（仅正常交叉，构图正常可读）、线段穿站 26→0、
+  站名/标注两两重叠 0、布局耗时 ≈0.53 s。
+- 附加验证（不阻塞）：164 站同口径并行重叠 9→0、近重合 36→0、交叉 428→2、穿站 33→0（≈0.54 s）；
+  随机线网鲁棒性压测 38/38 通过（见 `_reports/stress_report.md`）。
+- demo（10 站）：不触发布局重算，画布**逐像素不变**（PostScript 除 CreationDate 外逐字节相同）。
+- 算法数值不变：同一批点对 Result 的 `distance_km / time_min / transfers / expanded` 与修复前完全一致；
+  `core/`、`ui/window.py` 与只读基准 `_orig/path-nav` 逐字节相同。
+- 证据截图：`docs/布局修复证据/`；完整回归报告：`docs/布局修复证据/README.md`。
+
+### 已知边界
+
+- 示意布局只表示**拓扑关系**，不表示真实地理方位/比例；正常线路交叉保留（地铁示意图惯例）。
+- 共用同一对相邻站的并行线路在数据坐标层必然重合，画布渲染层用 ±4 px 小弧线视觉分开；
+  极端密集数据下站名仍按 LOD 抽稀（策略与修复前一致）。
