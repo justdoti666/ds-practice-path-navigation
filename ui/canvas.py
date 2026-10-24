@@ -12,6 +12,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import font as tkfont
 
+from ui.display_layout import station_positions
 from ui.p4_canvas import CanvasView as _P4Canvas
 
 START_COLOR = "#16a34a"
@@ -56,18 +57,51 @@ def _line_stations(graph) -> list[dict]:
     return lines
 
 
+class _DisplayStation:
+    """画布用的轻量站点代理：只有显示坐标，不是 P1 的 Graph.Station。
+
+    用代理而不是改真实 Station，是为了把"显示层示意布局"和数据层彻底隔离：
+    ``core/graph.py`` 里的坐标（A* 启发式、距离缺省值）一行都不变。
+    """
+
+    __slots__ = ("sid", "name", "x", "y")
+
+    def __init__(self, sid: str, name: str, x: float, y: float) -> None:
+        self.sid = sid
+        self.name = name
+        self.x = float(x)
+        self.y = float(y)
+
+
 class _CanvasGraph:
-    """P4 normalise_graph 需要的只读投影。"""
+    """P4 normalise_graph 需要的只读投影（站点坐标来自显示层示意布局）。"""
 
     def __init__(self, graph) -> None:
-        self.stations = graph.stations
         self.lines = _line_stations(graph)
-        try:
-            self._bbox = tuple(graph.bbox())
-        except Exception:
-            xs = [s.x for s in graph.stations.values()]
-            ys = [s.y for s in graph.stations.values()]
-            self._bbox = (min(xs), min(ys), max(xs), max(ys)) if xs else (0, 0, 1, 1)
+        # 数据层真实站点（只读引用）：p4 的 _segment_metrics 用它按**数据坐标**
+        # 补路径分段 km/min，不能拿显示坐标算。
+        self.source_stations = getattr(graph, "stations", {})
+        line_sequences = {ln["id"]: ln["stations"] for ln in self.lines}
+        # 只影响绘制：169 站等近似坐标数据会换成按拓扑排布的示意坐标；
+        # 10 站 demo 等手工坐标数据返回原坐标，画面与修复前一致。
+        display = station_positions(graph, line_sequences)
+
+        self.stations: dict[str, _DisplayStation] = {}
+        for sid, station in getattr(graph, "stations", {}).items():
+            x, y = display.get(sid, (getattr(station, "x", 0.0), getattr(station, "y", 0.0)))
+            name = getattr(station, "name", None) or getattr(station, "sid", sid)
+            self.stations[sid] = _DisplayStation(sid, str(name), x, y)
+
+        xs = [st.x for st in self.stations.values()]
+        ys = [st.y for st in self.stations.values()]
+        if xs:
+            self._bbox = (min(xs), min(ys), max(xs), max(ys))
+        else:
+            self._bbox = (0.0, 0.0, 1.0, 1.0)
+        if self._bbox[2] - self._bbox[0] < 1e-9:
+            self._bbox = (self._bbox[0], self._bbox[1], self._bbox[0] + 1.0, self._bbox[3])
+        if self._bbox[3] - self._bbox[1] < 1e-9:
+            self._bbox = (self._bbox[0], self._bbox[1], self._bbox[2], self._bbox[1] + 1.0)
 
     @property
     def bbox(self):
@@ -78,12 +112,17 @@ class CanvasView(_P4Canvas):
     def __init__(self, parent, graph, **kwargs):
         self._source_graph = graph
         super().__init__(parent, _CanvasGraph(graph), **kwargs)
+        # P4 画布内部用 ``_graph_raw`` 生成 PathView：``show_path`` / ``animate``
+        # 都会把它交给 ``normalise_result``，再由 ``_segment_metrics`` 用**数据坐标**
+        # 补路径分段的 km/min。这里覆盖成真实 Graph，保证标注数值不受示意布局影响。
+        self._graph_raw = graph
         self._selection = (None, None)
         self._done_job = None
 
     def set_graph(self, graph) -> None:      # P4 的签名：set_graph(self, graph)
         self._source_graph = graph
         super().set_graph(_CanvasGraph(graph))
+        self._graph_raw = graph
         self._draw_selection()
 
     def show_selection(self, start_id, end_id) -> None:
