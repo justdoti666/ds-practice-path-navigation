@@ -108,7 +108,7 @@ class SameStationError(UiError):
 
 class EmptyGraphError(UiError):
     title = "路网是空的"
-    hint = "检查 data/stations.csv 与 data/edges.csv 是否存在、是否有数据，然后点「重新加载」。"
+    hint = "检查数据文件是否存在、是否有数据，然后点「重新加载」。"
     severity = "error"
     retryable = True
 
@@ -125,7 +125,7 @@ class DisconnectedError(UiError):
             message = "起点与终点之间没有任何可通行的线路。"
         hint = (
             "这类站点目前还没有接入主城路网（例如在建中的 S1 线）。"
-            "换一个起点或终点再试，或检查 data/edges.csv 里是否缺了接驳区间。"
+            "换一个起点或终点再试，或检查数据文件里是否缺少接驳区间。"
         )
         super().__init__(message, hint)
 
@@ -138,7 +138,7 @@ class DataError(UiError):
     def __init__(self, message: str, hint: str = "") -> None:
         super().__init__(
             message,
-            hint or "常见原因：CSV 列名不对、里程/时间不是数字、站点 id 拼错。改好数据后点「重新加载」。",
+            hint or "常见原因：数据字段缺失、里程/时间不是数字、站点 id 拼错。改好数据后点「重新加载」。",
         )
 
 
@@ -345,6 +345,11 @@ class Controller:
             )
         except UiError:
             raise
+        except solver_mod.PathNotFound as exc:
+            # P2 对不可达路径抛 PathNotFound；界面要显示“不连通”，而不是笼统的数据错误
+            raise DisconnectedError(
+                self.name_for(self.start_id), self.name_for(self.end_id)
+            ) from exc
         except GraphDataError as exc:
             raise DataError(f"读取路网时出错：{exc}") from exc
         except Exception as exc:  # noqa: BLE001 - 任何算法/数据异常都转成可展示的错误
