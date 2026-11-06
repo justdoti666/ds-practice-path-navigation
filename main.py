@@ -137,7 +137,7 @@ def main(argv=None) -> int:
         return rc
 
     from ui.window import run_gui
-    run_gui(g)
+    run_gui(g, data_dir=Path(args.data).resolve())
     return 0
 
 

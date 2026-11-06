@@ -1434,6 +1434,10 @@ class MainWindow:
 
     def _reload_data(self) -> None:
         self._log("重新加载数据…")
+        old_start = self.controller.start_id
+        old_end = self.controller.end_id
+        old_algorithm = self.controller.algorithm
+        old_weight = self.controller.weight
         try:
             graph = load_graph(self.data_dir)
         except GraphDataError as exc:
@@ -1442,8 +1446,13 @@ class MainWindow:
         self.graph = graph
         self.controller = Controller(graph, bench_rows=self.controller.bench_rows,
                                      bench_status=self.controller.bench_status)
-        self.controller.weight = self.weight_var.get()
-        self.controller.algorithm = self._current_algorithm_key()
+        self.controller.weight = old_weight
+        self.controller.algorithm = old_algorithm
+        # 数据可能被替换：只有仍然存在的站点才保留选择，避免出现“幽灵起终点”。
+        if old_start in graph.stations:
+            self.controller.set_start(old_start)
+        if old_end in graph.stations:
+            self.controller.set_end(old_end)
         canvas_parent = self.view.master
         self.view.destroy()
         self.view = CanvasView(canvas_parent, graph)
@@ -1451,6 +1460,7 @@ class MainWindow:
         self.view.bind_click(self._on_canvas_click)
         self._populate_graph_meta()
         self._refresh_station_choices()
+        self.view.show_selection(self.controller.start_id, self.controller.end_id)
         self._last_result = None
         self.pick_mode = None
         self._refresh_pick_buttons()
@@ -1576,23 +1586,32 @@ def build_window(
 
 
 # ---------------------------------------------------------------- 入口适配
-def create_window(root: tk.Tk, graph=None):
-    """建窗：有 graph 用它（--data 生效），没有才回退到默认 demo。"""
+def create_window(root: tk.Tk, graph=None, data_dir: str | Path | None = None):
+    """建窗：有 graph 用它（--data 生效），并把数据来源传给窗口供 reload。
+
+    只传 graph 不传 data_dir 时，reload 会退化成 load_graph(None) → 默认 demo；
+    这正是「169 站刷新后只剩 10 站」的根因，因此两个入口都要带上路径。
+    """
     if graph is None:
-        return build_window(root, data_dir=None)
+        return build_window(root, data_dir=data_dir)
     from ui.p3_compat import _as_compat
 
-    bench_path = Path(__file__).resolve().parent.parent / "tools" / "bench.csv"
+    base = Path(data_dir) if data_dir else None
+    bench_path = (base / "bench.csv") if (base and base.is_dir()) else (
+        Path(__file__).resolve().parent.parent / "tools" / "bench.csv"
+    )
     rows, status = load_bench_rows(bench_path)
-    window = MainWindow(root, _as_compat(graph), bench_rows=rows, bench_status=status)
+    window = MainWindow(
+        root, _as_compat(graph), bench_rows=rows, bench_status=status, data_dir=base
+    )
     root.protocol("WM_DELETE_WINDOW", window.close)
     return window
 
 
-def run_gui(graph=None) -> int:
-    """main.py 的 GUI 入口：把 --data 加载好的图直接交给窗口，而不是重新读默认 demo。"""
+def run_gui(graph=None, data_dir: str | Path | None = None) -> int:
+    """main.py 的 GUI 入口：把图和它的数据路径一起交给窗口。"""
     root = tk.Tk()
-    create_window(root, graph)
+    create_window(root, graph, data_dir=data_dir)
     root.mainloop()
     return 0
 

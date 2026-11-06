@@ -364,7 +364,7 @@ def main(argv=None) -> int:
         win_w, win_h = _parse_size(args.size)
         win_x, win_y = _parse_pos(args.pos)
         root = tk.Tk()
-        window = create_window(root, graph)
+        window = create_window(root, graph, data_dir=data_path)
         root.attributes("-topmost", True)
         root.geometry(f"{win_w}x{win_h}+{win_x}+{win_y}")
         root.update()
