@@ -261,6 +261,29 @@ class TestStationSearch(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # 4. 三算法对比与 bench 同源
 # ---------------------------------------------------------------------------
+@unittest.skipUnless(HAS_TK, "tkinter 不可用，跳过界面用例")
+class TestReloadSourceWiring(unittest.TestCase):
+    """重新加载必须拿到当前数据源，不能回退默认 demo。"""
+
+    def test_create_window_keeps_data_dir(self) -> None:
+        from unittest.mock import MagicMock, patch
+        from ui import window as window_mod
+
+        target = ROOT / "data" / "real_metro.json"
+        with patch.object(window_mod, "MainWindow") as main_window:
+            window_mod.create_window(MagicMock(), make_graph(), data_dir=target)
+        self.assertEqual(main_window.call_args.kwargs["data_dir"], target)
+
+    def test_main_passes_data_dir_to_gui(self) -> None:
+        from unittest.mock import patch
+        import main
+
+        target = ROOT / "data" / "real_metro.json"
+        with patch("ui.window.run_gui") as run_gui:
+            main.main(["--data", str(target)])
+        self.assertEqual(Path(run_gui.call_args.kwargs["data_dir"]), target.resolve())
+
+
 @unittest.skipUnless((ROOT / "data" / "bench.csv").exists(), "缺少 data/bench.csv")
 @unittest.skipUnless(HAS_TK, "tkinter 不可用，跳过界面用例")
 class TestComparePanel(unittest.TestCase):
