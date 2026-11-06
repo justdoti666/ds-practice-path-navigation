@@ -234,6 +234,30 @@ class TestStationLabels(unittest.TestCase):
         self.assertIsNone(parse_station_label("   "))
 
 
+@unittest.skipUnless(HAS_TK, "tkinter 不可用，跳过界面用例")
+class TestStationSearch(unittest.TestCase):
+    """起终点输入框的模糊搜索（Tk 无关的 Controller 部分）。"""
+
+    def setUp(self) -> None:
+        self.controller = Controller(make_graph())
+
+    def test_search_by_name_substring(self) -> None:
+        self.assertEqual([sid for sid, _ in self.controller.search_stations("人民")], ["S02"])
+
+    def test_search_by_id_is_case_insensitive(self) -> None:
+        self.assertEqual([sid for sid, _ in self.controller.search_stations("s07")], ["S07"])
+
+    def test_blank_query_returns_all(self) -> None:
+        self.assertEqual(len(self.controller.search_stations("")), 3)
+
+    def test_no_match_returns_empty(self) -> None:
+        self.assertEqual(self.controller.search_stations("不存在"), [])
+
+    def test_exact_match_ranks_first(self) -> None:
+        matches = self.controller.search_stations("S01")
+        self.assertEqual(matches[0][0], "S01")
+
+
 # ---------------------------------------------------------------------------
 # 4. 三算法对比与 bench 同源
 # ---------------------------------------------------------------------------

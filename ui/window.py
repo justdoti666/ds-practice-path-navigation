@@ -59,6 +59,7 @@ TEXT = "#0f172a"
 MUTED = "#64748b"
 ACCENT = "#1d4ed8"
 ACCENT_SOFT = "#e8efff"
+PICK_HINT_DEFAULT = "可直接输入站名/编号搜索；也可点画布选站"
 
 STATE_STYLE = {
     "idle": ("空闲", "#64748b", "#eef2f7"),
@@ -265,6 +266,32 @@ class Controller:
         for sid in sorted(self.graph.stations):
             out.append((sid, station_label(self.graph.stations[sid].name, sid)))
         return out
+
+    def search_stations(self, query: str) -> list[tuple[str, str]]:
+        """按站名/编号模糊搜索，返回 [(id, "站名（ID）")]。
+
+        先按相关度排序（完全匹配 > 前缀匹配 > 包含），同档按 id 排序；
+        空查询返回全部站点，供下拉框恢复完整列表。
+        """
+        q = (query or "").strip().lower()
+        choices = self.station_choices()
+        if not q:
+            return choices
+        ranked: list[tuple[int, str, str]] = []
+        for sid, label in choices:
+            name = self.graph.stations[sid].name
+            haystack = f"{name} {sid} {label}".lower()
+            if q not in haystack:
+                continue
+            if q in (name.lower(), sid.lower(), label.lower()):
+                rank = 0
+            elif name.lower().startswith(q) or sid.lower().startswith(q):
+                rank = 1
+            else:
+                rank = 2
+            ranked.append((rank, sid, label))
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        return [(sid, label) for _rank, sid, label in ranked]
 
     def label_for(self, sid: str | None) -> str:
         if not sid or sid not in self.graph.stations:
@@ -580,19 +607,25 @@ class MainWindow:
         # 起终点
         trip = tk.Frame(self.left, bg=CARD, padx=pad, pady=0)
         trip.pack(fill="x", pady=(10, 0))
-        tk.Label(trip, text="起点", bg=CARD, fg=MUTED, font=(self.family, 9)).pack(anchor="w")
+        tk.Label(trip, text="起点（可输入站名/编号）", bg=CARD, fg=MUTED,
+                 font=(self.family, 9)).pack(anchor="w")
         self.start_var = tk.StringVar()
-        self.start_combo = ttk.Combobox(trip, textvariable=self.start_var, state="readonly",
+        self.start_combo = ttk.Combobox(trip, textvariable=self.start_var, state="normal",
                                         height=12)
         self.start_combo.pack(fill="x", pady=(3, 6))
         self.start_combo.bind("<<ComboboxSelected>>", self._on_start_combo)
+        self.start_combo.bind("<Return>", lambda _e: self._on_station_return("start"))
+        self.start_combo.bind("<KeyRelease>", self._on_station_key)
 
-        tk.Label(trip, text="终点", bg=CARD, fg=MUTED, font=(self.family, 9)).pack(anchor="w")
+        tk.Label(trip, text="终点（可输入站名/编号）", bg=CARD, fg=MUTED,
+                 font=(self.family, 9)).pack(anchor="w")
         self.end_var = tk.StringVar()
-        self.end_combo = ttk.Combobox(trip, textvariable=self.end_var, state="readonly",
+        self.end_combo = ttk.Combobox(trip, textvariable=self.end_var, state="normal",
                                       height=12)
         self.end_combo.pack(fill="x", pady=(3, 6))
         self.end_combo.bind("<<ComboboxSelected>>", self._on_end_combo)
+        self.end_combo.bind("<Return>", lambda _e: self._on_station_return("end"))
+        self.end_combo.bind("<KeyRelease>", self._on_station_key)
 
         pick_row = tk.Frame(trip, bg=CARD)
         pick_row.pack(fill="x", pady=(0, 2))
@@ -609,7 +642,7 @@ class MainWindow:
         self.pick_end_btn.pack(side="left", padx=(6, 0))
 
         self.pick_hint = tk.Label(
-            trip, text="在画布上点站点，也能直接选起终点", bg=CARD, fg=MUTED,
+            trip, text=PICK_HINT_DEFAULT, bg=CARD, fg=MUTED,
             font=(self.family, 8), anchor="w", justify="left", wraplength=286,
         )
         self.pick_hint.pack(fill="x", pady=(3, 0))
@@ -855,14 +888,97 @@ class MainWindow:
     # 交互：起终点
     # ------------------------------------------------------------------
     def _on_start_combo(self, _event=None) -> None:
-        sid = parse_station_label(self.start_var.get())
-        self.controller.set_start(sid)
-        self._after_selection_change()
+        self._select_from_combo("start")
 
     def _on_end_combo(self, _event=None) -> None:
-        sid = parse_station_label(self.end_var.get())
-        self.controller.set_end(sid)
-        self._after_selection_change()
+        self._select_from_combo("end")
+
+    # ---- 起终点输入框：边输入边筛选，Enter 选定 ---------------------
+    def _on_station_key(self, event) -> None:
+        if event.keysym in ("Up", "Down", "Return", "Escape", "Tab"):
+            return
+        which = "start" if event.widget is self.start_combo else "end"
+        self._filter_station_combo(which)
+
+    def _on_station_return(self, which: str) -> str:
+        self._commit_station_entry(which)
+        return "break"
+
+    def _filter_station_combo(self, which: str) -> None:
+        combo = self.start_combo if which == "start" else self.end_combo
+        query = combo.get().strip()
+        if not query:
+            combo.configure(values=self._choice_labels)
+            self.pick_hint.configure(text=PICK_HINT_DEFAULT, fg=MUTED)
+            return
+        matches = self.controller.search_stations(query)
+        labels = [label for _, label in matches]
+        combo.configure(values=labels)
+        if not labels:
+            self.pick_hint.configure(text=f"没有匹配「{query}」的站点", fg="#b91c1c")
+        elif len(labels) == 1:
+            self.pick_hint.configure(
+                text=f"匹配 1 个：{labels[0]}；按 Enter 选定", fg=ACCENT
+            )
+        else:
+            self.pick_hint.configure(
+                text=f"匹配 {len(labels)} 个站点；按 Enter 或点下拉选择", fg=ACCENT
+            )
+
+    def _resolve_station_id(self, text: str) -> str | None:
+        text = (text or "").strip()
+        if not text:
+            return None
+        matches = self.controller.search_stations(text)
+        for sid, label in matches:
+            if text.lower() in (
+                label.lower(), self.controller.name_for(sid).lower(), sid.lower()
+            ):
+                return sid
+        return matches[0][0] if len(matches) == 1 else None
+
+    def _commit_station_entry(self, which: str) -> bool:
+        combo = self.start_combo if which == "start" else self.end_combo
+        text = combo.get().strip()
+        if not text:
+            return True
+        current = self.controller.label_for(
+            self.controller.start_id if which == "start" else self.controller.end_id
+        )
+        if text == current:
+            self._reset_station_choices()
+            return True
+        sid = self._resolve_station_id(text)
+        if sid is None:
+            matches = self.controller.search_stations(text)
+            if matches:
+                combo.configure(values=[label for _, label in matches])
+                self.pick_hint.configure(
+                    text=f"匹配 {len(matches)} 个站点；请从下拉框选择", fg=ACCENT
+                )
+            else:
+                self.pick_hint.configure(text=f"没有匹配「{text}」的站点", fg="#b91c1c")
+            return False
+        self._apply_pick(which, sid, source="搜索")
+        self._reset_station_choices()
+        return True
+
+    def _reset_station_choices(self) -> None:
+        # 只恢复候选列表，不覆写另一个输入框的文本：
+        # 用户可能已经输入了终点但还没按 Enter，提交起点时不能把它清掉。
+        self.start_combo.configure(values=self._choice_labels)
+        self.end_combo.configure(values=self._choice_labels)
+        self.pick_hint.configure(text=PICK_HINT_DEFAULT, fg=MUTED)
+
+    def _select_from_combo(self, which: str) -> None:
+        combo = self.start_combo if which == "start" else self.end_combo
+        text = combo.get().strip()
+        sid = parse_station_label(text) or self._resolve_station_id(text)
+        if sid is None:
+            self.pick_hint.configure(text=f"没有匹配「{text}」的站点", fg="#b91c1c")
+            return
+        self._apply_pick(which, sid, source="搜索")
+        self._reset_station_choices()
 
     def _current_algorithm_key(self) -> str:
         label = self.algorithm_var.get()
@@ -907,16 +1023,16 @@ class MainWindow:
                 text="起终点都已选好；要改选，先点「点选起点／点选终点」", fg="#b45309"
             )
 
-    def _apply_pick(self, which: str, sid: str) -> None:
+    def _apply_pick(self, which: str, sid: str, source: str = "点选") -> None:
         name = self.controller.name_for(sid)
         if which == "start":
             self.controller.set_start(sid)
             self.start_combo.set(self.controller.label_for(sid))
-            self._log(f"点选起点：{name}（{sid}）")
+            self._log(f"{source}起点：{name}（{sid}）")
         else:
             self.controller.set_end(sid)
             self.end_combo.set(self.controller.label_for(sid))
-            self._log(f"点选终点：{name}（{sid}）")
+            self._log(f"{source}终点：{name}（{sid}）")
         self.pick_hint.configure(text="已选中，可继续点选或直接搜索", fg=MUTED)
         self._after_selection_change()
 
@@ -931,7 +1047,7 @@ class MainWindow:
         elif mode == "end":
             self.pick_hint.configure(text="点选模式：请在右侧画布点击终点站点", fg=ACCENT)
         else:
-            self.pick_hint.configure(text="在画布上点站点，也能直接选起终点", fg=MUTED)
+            self.pick_hint.configure(text=PICK_HINT_DEFAULT, fg=MUTED)
 
     def _refresh_pick_buttons(self) -> None:
         mode = getattr(self, "pick_mode", None)
@@ -959,6 +1075,9 @@ class MainWindow:
     def _on_search(self) -> None:
         if self._animating or self.controller.state is SearchState.COMPUTING:
             return
+        for which in ("start", "end"):
+            if not self._commit_station_entry(which):
+                return
         try:
             token = self.controller.begin_search()
         except UiError as err:
@@ -1136,8 +1255,9 @@ class MainWindow:
         self.swap_btn.configure(state=normal)
         self.pick_start_btn.configure(state=normal)
         self.pick_end_btn.configure(state=normal)
-        for combo in (self.start_combo, self.end_combo, self.algorithm_combo):
-            combo.configure(state="disabled" if busy else "readonly")
+        for combo in (self.start_combo, self.end_combo):
+            combo.configure(state="disabled" if busy else "normal")
+        self.algorithm_combo.configure(state="disabled" if busy else "readonly")
         computing = self.controller.state is SearchState.COMPUTING
         self.cancel_btn.configure(state="normal" if computing else "disabled")
         has_result = self._last_result is not None
