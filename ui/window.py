@@ -28,7 +28,7 @@ from tkinter import ttk
 from core import solver as solver_mod
 from ui.p3_compat import Graph, GraphDataError, load_graph
 from ui.canvas import CanvasView, pick_ui_font
-from ui.widgets import NoticeDialog, flat_button
+from ui.widgets import NoticeDialog, StationSuggestPopup, flat_button
 
 __all__ = [
     "MainWindow",
@@ -497,6 +497,8 @@ class MainWindow:
         self._bench_status = bench_status or "未配置基准"
         self._events: queue.Queue = queue.Queue()
         self._dialogs: list[NoticeDialog] = []
+        self._station_popup: StationSuggestPopup | None = None
+        self._suggest_which: str | None = None
         self._drain_after = None
 
         root.title(APP_TITLE)
@@ -513,6 +515,7 @@ class MainWindow:
         self.root.bind("<Escape>", self._on_escape)
         self.root.bind("<Control-c>", self._on_copy)
         self.root.bind("<F5>", lambda _e: self._retry())
+        self.root.bind("<Button-1>", self._on_root_click, add="+")
         self.root.after(60, self._drain_events)
         if startup_error is not None:
             self.root.after(350, lambda: self._show_error(startup_error, on_retry=self._reload_data))
@@ -616,6 +619,9 @@ class MainWindow:
         self.start_combo.bind("<<ComboboxSelected>>", self._on_start_combo)
         self.start_combo.bind("<Return>", lambda _e: self._on_station_return("start"))
         self.start_combo.bind("<KeyRelease>", self._on_station_key)
+        self.start_combo.bind("<Down>", lambda _e: self._on_station_arrow("start", 1))
+        self.start_combo.bind("<Up>", lambda _e: self._on_station_arrow("start", -1))
+        self.start_combo.bind("<Button-1>", lambda _e: self._hide_station_suggestions(), add="+")
 
         tk.Label(trip, text="终点（可输入站名/编号）", bg=CARD, fg=MUTED,
                  font=(self.family, 9)).pack(anchor="w")
@@ -626,6 +632,9 @@ class MainWindow:
         self.end_combo.bind("<<ComboboxSelected>>", self._on_end_combo)
         self.end_combo.bind("<Return>", lambda _e: self._on_station_return("end"))
         self.end_combo.bind("<KeyRelease>", self._on_station_key)
+        self.end_combo.bind("<Down>", lambda _e: self._on_station_arrow("end", 1))
+        self.end_combo.bind("<Up>", lambda _e: self._on_station_arrow("end", -1))
+        self.end_combo.bind("<Button-1>", lambda _e: self._hide_station_suggestions(), add="+")
 
         pick_row = tk.Frame(trip, bg=CARD)
         pick_row.pack(fill="x", pady=(0, 2))
@@ -901,7 +910,30 @@ class MainWindow:
         self._filter_station_combo(which)
 
     def _on_station_return(self, which: str) -> str:
+        if (
+            self._station_popup is not None
+            and self._station_popup.visible
+            and self._suggest_which == which
+        ):
+            label = self._station_popup.selected_label()
+            if label:
+                combo = self.start_combo if which == "start" else self.end_combo
+                combo.set(label)
         self._commit_station_entry(which)
+        self._hide_station_suggestions()
+        return "break"
+
+    def _on_station_arrow(self, which: str, delta: int) -> str:
+        if (
+            self._station_popup is not None
+            and self._station_popup.visible
+            and self._suggest_which == which
+        ):
+            self._station_popup.move(delta)
+        else:
+            self._filter_station_combo(which)
+            if self._station_popup is not None and self._station_popup.visible:
+                self._station_popup.move(delta if delta > 0 else -1)
         return "break"
 
     def _filter_station_combo(self, which: str) -> None:
@@ -909,11 +941,16 @@ class MainWindow:
         query = combo.get().strip()
         if not query:
             combo.configure(values=self._choice_labels)
+            self._hide_station_suggestions()
             self.pick_hint.configure(text=PICK_HINT_DEFAULT, fg=MUTED)
             return
         matches = self.controller.search_stations(query)
         labels = [label for _, label in matches]
         combo.configure(values=labels)
+        if labels:
+            self._show_station_suggestions(which, labels)
+        else:
+            self._hide_station_suggestions()
         if not labels:
             self.pick_hint.configure(text=f"没有匹配「{query}」的站点", fg="#b91c1c")
         elif len(labels) == 1:
@@ -922,7 +959,7 @@ class MainWindow:
             )
         else:
             self.pick_hint.configure(
-                text=f"匹配 {len(labels)} 个站点；按 Enter 或点下拉选择", fg=ACCENT
+                text=f"匹配 {len(labels)} 个站点；按 Enter 或点击候选", fg=ACCENT
             )
 
     def _resolve_station_id(self, text: str) -> str | None:
@@ -941,6 +978,7 @@ class MainWindow:
         combo = self.start_combo if which == "start" else self.end_combo
         text = combo.get().strip()
         if not text:
+            self._hide_station_suggestions()
             return True
         current = self.controller.label_for(
             self.controller.start_id if which == "start" else self.controller.end_id
@@ -968,7 +1006,57 @@ class MainWindow:
         # 用户可能已经输入了终点但还没按 Enter，提交起点时不能把它清掉。
         self.start_combo.configure(values=self._choice_labels)
         self.end_combo.configure(values=self._choice_labels)
+        self._hide_station_suggestions()
         self.pick_hint.configure(text=PICK_HINT_DEFAULT, fg=MUTED)
+
+    def _ensure_station_popup(self) -> StationSuggestPopup:
+        if self._station_popup is None or not self._station_popup.winfo_exists():
+            self._station_popup = StationSuggestPopup(
+                self.root, self._on_station_suggestion
+            )
+        return self._station_popup
+
+    def _show_station_suggestions(self, which: str, labels: list[str]) -> None:
+        if not labels:
+            self._hide_station_suggestions()
+            return
+        self._suggest_which = which
+        combo = self.start_combo if which == "start" else self.end_combo
+        self._ensure_station_popup().show(combo, labels)
+
+    def _hide_station_suggestions(self) -> None:
+        self._suggest_which = None
+        if self._station_popup is not None and self._station_popup.winfo_exists():
+            self._station_popup.hide()
+
+    def _on_station_suggestion(self, label: str) -> None:
+        which = self._suggest_which
+        if which is None:
+            return
+        combo = self.start_combo if which == "start" else self.end_combo
+        combo.set(label)
+        self._commit_station_entry(which)
+        self._hide_station_suggestions()
+        combo.focus_set()
+
+    def _on_root_click(self, event) -> None:
+        if self._station_popup is None or not self._station_popup.visible:
+            return
+        widget = event.widget
+        combo = self.start_combo if self._suggest_which == "start" else self.end_combo
+        if self._widget_inside(widget, combo) or self._widget_inside(widget, self._station_popup):
+            return
+        self._hide_station_suggestions()
+
+    def _widget_inside(self, widget, ancestor) -> bool:
+        current = widget
+        while current is not None:
+            if current is ancestor:
+                return True
+            if current is self.root:
+                break
+            current = getattr(current, "master", None)
+        return False
 
     def _select_from_combo(self, which: str) -> None:
         combo = self.start_combo if which == "start" else self.end_combo
@@ -1433,6 +1521,7 @@ class MainWindow:
                 pass
 
     def _reload_data(self) -> None:
+        self._hide_station_suggestions()
         self._log("重新加载数据…")
         old_start = self.controller.start_id
         old_end = self.controller.end_id
@@ -1474,6 +1563,11 @@ class MainWindow:
     def close(self) -> None:
         """关窗时停掉轮询定时器，避免 Tk 报 "invalid command name"。"""
         try:
+            if self._station_popup is not None and self._station_popup.winfo_exists():
+                self._station_popup.destroy()
+        except tk.TclError:
+            pass
+        try:
             if self._drain_after is not None:
                 self.root.after_cancel(self._drain_after)
                 self._drain_after = None
@@ -1498,6 +1592,9 @@ class MainWindow:
     def _on_escape(self, _event=None) -> None:
         if self._dialogs:
             return
+        if self._station_popup is not None and self._station_popup.visible:
+            self._hide_station_suggestions()
+            return "break"
         self._on_clear()
 
     def _on_copy(self, _event=None):
